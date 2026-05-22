@@ -21,6 +21,12 @@ PARQUET_CONSOLIDADO= BASE_DIR / "data" / "consolidado.parquet"
 PARQUET_FEATURES   = BASE_DIR / "data" / "consolidado_features.parquet"
 EXCEL_OUTPUT       = BASE_DIR / "output" / f"analisis_{COMERCIO_NOMBRE}.xlsx"
 
+# ─── TIPO DE JOURNAL ─────────────────────────────────────────────────────────
+#  True  → el journal contiene SOLO transacciones APROBADAS
+#           (features de rechazo/CVV no se calculan — no hay denegadas)
+#  False → el journal contiene APROBADAS + DENEGADAS (análisis completo)
+SOLO_APROBADAS = False
+
 # ─── CARGA DE JOURNALS ───────────────────────────────────────────────────────
 SKIPROWS = 3    # header en fila 4 → saltar las 3 primeras
 
