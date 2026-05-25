@@ -113,6 +113,18 @@ def consolidar():
     log.info(f"Total filas consolidadas: {len(consolidado):,}")
     log.info(f"Total columnas: {len(consolidado.columns)}")
 
+    # Normalizar columnas con tipos mixtos (ej: '000' string vs número)
+    # para que pyarrow pueda guardar el Parquet sin error.
+    cols_objeto = consolidado.select_dtypes(include="object").columns
+    for col in cols_objeto:
+        tiene_mixto = consolidado[col].apply(type).nunique() > 1
+        if tiene_mixto:
+            log.warning(f"  Columna con tipos mixtos, convirtiendo a texto: '{col}'")
+            consolidado[col] = consolidado[col].where(
+                consolidado[col].isna(),
+                consolidado[col].astype(str),
+            )
+
     consolidado.to_parquet(ARCHIVO_SALIDA, index=False, engine="pyarrow")
     log.info(f"Archivo guardado: {ARCHIVO_SALIDA}")
 
