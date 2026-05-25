@@ -103,11 +103,11 @@ class LectorOutlook:
 
                 if ruta_destino.exists():
                     print(f"  [SKIP] Ya existe: {nuevo_nombre}")
-                else:
-                    att.SaveAsFile(str(ruta_destino))
-                    print(f"  [OK]   Descargado: {nuevo_nombre}  "
-                          f"(correo del {fecha_dt.strftime('%d/%m/%Y %H:%M')})")
+                    continue   # ← ya procesado, no agregar a la lista
 
+                att.SaveAsFile(str(ruta_destino))
+                print(f"  [OK]   Descargado: {nuevo_nombre}  "
+                      f"(correo del {fecha_dt.strftime('%d/%m/%Y %H:%M')})")
                 descargados.append({
                     "ruta":     ruta_destino,
                     "fecha":    fecha_str,
