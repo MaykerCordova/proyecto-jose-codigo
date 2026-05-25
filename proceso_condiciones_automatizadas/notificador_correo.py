@@ -35,16 +35,20 @@ class NotificadorCorreo:
         mail.Subject = self._asunto(fecha_str, resultados)
         mail.Body    = self._cuerpo(resultados, grupos, fecha_str)
 
-        # Adjuntar todos los TXT generados
+        # Adjuntar todos los TXT generados (puede haber varias fechas)
         adjuntos_agregados = 0
         for cod, res in resultados.items():
             if not res.get("ok"):
                 continue
-            run_dir = Path(res["run_dir"])
-            for txt in sorted(run_dir.glob("*.txt")):
-                mail.Attachments.Add(str(txt))
-                adjuntos_agregados += 1
-                print(f"  [Correo] Adjunto: {txt.name}")
+            # run_dir puede ser un Path o una lista de Paths
+            run_dirs = res["run_dir"]
+            if not isinstance(run_dirs, list):
+                run_dirs = [run_dirs]
+            for run_dir in run_dirs:
+                for txt in sorted(Path(run_dir).glob("*.txt")):
+                    mail.Attachments.Add(str(txt))
+                    adjuntos_agregados += 1
+                    print(f"  [Correo] Adjunto: {txt.name}")
 
         mail.Send()
         print(f"\n  Correo enviado a {self.destinatario}")

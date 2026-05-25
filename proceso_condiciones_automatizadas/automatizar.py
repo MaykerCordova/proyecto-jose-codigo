@@ -67,8 +67,17 @@ def ejecutar_pipeline_completo():
         if salida:
             # Acumular resultados de todas las fechas procesadas
             for cod, res in salida["resultados"].items():
-                # Si ya existe la condición, conservar el último resultado
-                todos_resultados[cod] = res
+                if cod not in todos_resultados:
+                    todos_resultados[cod] = res
+                else:
+                    # Si la condición ya existe, combinar las run_dirs
+                    # para que el notificador envíe TXT de TODAS las fechas
+                    existente = todos_resultados[cod]
+                    if isinstance(existente.get("run_dir"), list):
+                        existente["run_dir"].append(res["run_dir"])
+                    else:
+                        existente["run_dir"] = [existente["run_dir"], res["run_dir"]]
+                    existente["ultimo"] = res["ultimo"]  # conservar el último correlativo
 
             for cod, df in salida["grupos"].items():
                 if cod not in todos_grupos:
