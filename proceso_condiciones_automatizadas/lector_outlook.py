@@ -8,7 +8,7 @@
 
 import win32com.client
 from pathlib import Path
-from datetime import datetime
+from datetime import datetime, timedelta
 
 
 # ── CONFIGURACIÓN ────────────────────────────────────────────
@@ -18,6 +18,9 @@ CARPETA_OUTLOOK = "Condiciones Automatizadas"
 
 # Carpeta local donde se guardan los Excel descargados
 CARPETA_DESTINO = "Entrada"
+
+# Solo procesa correos de los últimos N días (evita históricos)
+DIAS_ATRAS = 7
 # ─────────────────────────────────────────────────────────────
 
 
@@ -28,16 +31,18 @@ class LectorOutlook:
         carpeta_outlook: str = CARPETA_OUTLOOK,
         destino: str = None,
         base_dir: Path = None,
+        dias_atras: int = DIAS_ATRAS,
     ):
         self.carpeta_outlook = carpeta_outlook
         self.base_dir        = Path(base_dir) if base_dir else Path(__file__).resolve().parent
         self.destino         = self.base_dir / (destino or CARPETA_DESTINO)
+        self.dias_atras      = dias_atras
         self.destino.mkdir(parents=True, exist_ok=True)
 
     def extraer_pendientes(self) -> list:
         """
-        Recorre la carpeta de Outlook y descarga todos los adjuntos
-        Excel que aún no existen en la carpeta Entrada/.
+        Recorre la carpeta de Outlook y descarga los adjuntos Excel
+        de los últimos DIAS_ATRAS días que aún no existen en Entrada/.
 
         Retorna lista ordenada por fecha (más antiguo primero):
         [
@@ -47,8 +52,11 @@ class LectorOutlook:
         ]
         """
         print(f"\n[Outlook] Conectando a carpeta: '{self.carpeta_outlook}'...")
-        outlook = win32com.client.Dispatch("Outlook.Application")
-        ns      = outlook.GetNamespace("MAPI")
+        print(f"  Buscando correos de los últimos {self.dias_atras} días...")
+
+        outlook      = win32com.client.Dispatch("Outlook.Application")
+        ns           = outlook.GetNamespace("MAPI")
+        fecha_limite = datetime.now() - timedelta(days=self.dias_atras)
 
         carpeta = self._encontrar_carpeta(ns)
         items   = carpeta.Items
@@ -76,6 +84,11 @@ class LectorOutlook:
                 fecha_recibido.minute,
                 fecha_recibido.second,
             )
+
+            # Saltar correos más antiguos que el límite
+            if fecha_dt < fecha_limite:
+                continue
+
             fecha_str = fecha_dt.strftime("%d%m%Y")
 
             for i in range(1, mail.Attachments.Count + 1):

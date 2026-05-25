@@ -53,12 +53,16 @@ def ejecutar_pipeline_completo():
         fecha_str = item["fecha"]
 
         print(f"\n  --- Procesando: {ruta.name} (fecha: {fecha_str}) ---")
-        pipeline = PipelineCondiciones(
-            ruta_excel = str(ruta),
-            base_dir   = str(BASE_DIR),
-            fecha_str  = fecha_str,
-        )
-        salida = pipeline.ejecutar()
+        try:
+            pipeline = PipelineCondiciones(
+                ruta_excel = str(ruta),
+                base_dir   = str(BASE_DIR),
+                fecha_str  = fecha_str,
+            )
+            salida = pipeline.ejecutar()
+        except Exception as e:
+            print(f"  [SKIP] {ruta.name} no se pudo procesar: {e}")
+            continue
 
         if salida:
             # Acumular resultados de todas las fechas procesadas
