@@ -395,7 +395,7 @@ class ConvertidorMonitor:
 
         for j in range(1, files_cnt + 1):
             file_number = str(j).zfill(2)
-            file_path   = run_dir / f"RECLAMOS_{fecha_proceso}_{file_number}.txt"
+            file_path   = run_dir / f"RECLAMOS_{fecha_proceso}_{self.condicion}_{file_number}.txt"
             start       = (j - 1) * 800
             end         = min(j * 800, rows_cnt)
             lines       = hoja1.loc[start:end - 1, "REGISTRO_TXT"].tolist()
