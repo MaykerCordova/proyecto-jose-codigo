@@ -20,7 +20,7 @@ CARPETA_OUTLOOK = "Condiciones Automatizadas"
 CARPETA_DESTINO = "Entrada"
 
 # Solo procesa correos de los últimos N días (evita históricos)
-DIAS_ATRAS = 7
+DIAS_ATRAS = 2
 # ─────────────────────────────────────────────────────────────
 
 
