@@ -666,10 +666,11 @@ class BitacoraComercio:
 
 class PipelineCondiciones:
 
-    def __init__(self, ruta_excel: str, base_dir: str = None):
+    def __init__(self, ruta_excel: str, base_dir: str = None, fecha_str: str = None):
         self.ruta_excel = Path(ruta_excel)
         self.base_dir   = Path(base_dir) if base_dir else Path(__file__).resolve().parent
-        self.fecha_str  = datetime.today().strftime("%d%m%Y")
+        # Si se pasa --fecha se usa esa, si no se usa la fecha de hoy
+        self.fecha_str  = fecha_str if fecha_str else datetime.today().strftime("%d%m%Y")
 
     def ejecutar(self):
         sep = "=" * 60
@@ -726,19 +727,38 @@ class PipelineCondiciones:
                 print(f"  ✗ [{cod}] FALLÓ — {res['error']}")
         print(f"{sep}\n")
 
+        # Retorna datos para que automatizar.py pueda usarlos
+        return {"grupos": grupos, "resultados": resultados}
+
 
 # ============================================================
 # EJECUCIÓN DIRECTA
-# python pipeline_condiciones.py condiciones_24052026.xlsx
+# python pipeline_condiciones.py <ruta_excel> [--fecha DDMMYYYY]
+# Ejemplos:
+#   python pipeline_condiciones.py "Entrada\Archivo Base 24_05_26.xlsx"
+#   python pipeline_condiciones.py "Entrada\Archivo Base 24_05_26.xlsx" --fecha 24052026
 # ============================================================
 
 if __name__ == "__main__":
-    import sys
+    import argparse
 
-    if len(sys.argv) < 2:
-        print("\nUso: python pipeline_condiciones.py <ruta_excel>")
-        print("Ejemplo: python pipeline_condiciones.py condiciones_24052026.xlsx\n")
-        sys.exit(1)
+    parser = argparse.ArgumentParser(
+        description="Pipeline de condiciones automatizadas — Scotiabank Perú"
+    )
+    parser.add_argument(
+        "ruta_excel",
+        help="Ruta al Excel de entrada (Archivo Base DD_MM_YY.xlsx)"
+    )
+    parser.add_argument(
+        "--fecha",
+        default=None,
+        help="Fecha de proceso en formato DDMMYYYY (ej: 24052026). "
+             "Si no se indica se usa la fecha de hoy."
+    )
+    args = parser.parse_args()
 
-    pipeline = PipelineCondiciones(ruta_excel=sys.argv[1])
+    pipeline = PipelineCondiciones(
+        ruta_excel=args.ruta_excel,
+        fecha_str=args.fecha
+    )
     pipeline.ejecutar()
