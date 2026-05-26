@@ -31,7 +31,7 @@ import win32com.client
 from datetime import datetime
 
 # ══════════════════════════════════════════════════════════════════
-# ▶  CONFIGURACIÓN — solo editar FECHA_INICIO y MODO_RESET
+# ▶  CONFIGURACIÓN — solo editar estas variables
 # ══════════════════════════════════════════════════════════════════
 
 # Procesar correos desde esta fecha en adelante
@@ -41,6 +41,10 @@ FECHA_INICIO = datetime(2026, 1, 1)
 # False = solo agrega los que no existen (si ya corriste el bootstrap
 #         una vez y quieres agregar correos nuevos sin resetear)
 MODO_RESET = True
+
+# Número desde el que debe arrancar el correlativo.
+# Si el SQLite ya tiene registros con correlativos mayores, continúa desde ahí.
+CORRELATIVO_INICIAL = 2671
 
 # Las rutas se construyen automáticamente desde el usuario de Windows actual
 _BASE = os.path.join(
@@ -309,7 +313,7 @@ def main():
 
                 d = parsear_cuerpo(m.Body)
 
-                correlativo  = get_max_correlativo(RUTA_DB_SQLITE) + 1
+                correlativo  = max(get_max_correlativo(RUTA_DB_SQLITE) + 1, CORRELATIVO_INICIAL)
                 parte_corr   = f"{correlativo:04d}"
                 parte_fecha  = m.SentOn.strftime("%d%m%y")
                 parte_tool   = d.get("Herramienta", "-").strip()
