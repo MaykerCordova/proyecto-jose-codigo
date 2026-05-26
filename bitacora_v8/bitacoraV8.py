@@ -440,44 +440,8 @@ def main():
                 id_sys  = ProcesadorTexto.extraer_id(m.Subject) or "-"
 
                 if sql.existe_conversation(conv_id):
-                    print(f"  [DUP] ConversationID ya registrado: {id_sys}")
-                    id_dup      = f"{conv_id}_DUP_{datetime.now().strftime('%H%M%S')}"
-                    correlativo = sql.get_max_correlativo() + 1
-                    fila_dup    = {
-                        "Nro_Correlativo":   correlativo,
-                        "Fecha":             m.SentOn.strftime("%d/%m/%Y"),
-                        "Hora":              m.SentOn.strftime("%H:%M"),
-                        "Codigo_Generado":   f"DUP-{id_sys}",
-                        "Maker":             m.SenderName,
-                        "Solicitado_Por":    "-",
-                        "Herramienta":       "-",
-                        "Accion":            "-",
-                        "Institucion":       "-",
-                        "Codigo_Condicion":  "-",
-                        "Nombre_Condicion":  "-",
-                        "Estatus_Condicion": "-",
-                        "Tipo_Condicion":    "-",
-                        "Consideraciones":   "-",
-                        "Objetivo":          "-",
-                        "Estimacion":        "-",
-                        "Sustento":          "-",
-                        "Sustento_Respuesta": "-",
-                        "Checker":           "-",
-                        "Fecha_Revision":    "-",
-                        "Hora_Revision":     "-",
-                        "Mes_Revision":      "-",
-                        "Anio_Revision":     "-",
-                        "Enviado_Jefatura":  "SI",
-                        "Conformidad":       "REVISAR - DUPLICADO",
-                        "Canal":             "-",
-                        "ID_Sistema":        id_sys,
-                        "ConversationID":     id_dup,
-                    }
-                    sql.insertar_solicitud(fila_dup)
-                    outlook.guardar_msg(m, f"DUP_{id_sys}")
+                    print(f"  [DUP] ConversationID ya registrado, ignorando: {id_sys}")
                     m.UnRead = False
-                    cambios += 1
-                    print(f"  ⚠️  Duplicado guardado. Completa manualmente.")
                     continue
 
                 print(f"  [+] Nuevo ticket: {id_sys}")
