@@ -237,6 +237,7 @@ def actualizar_aprobacion(ruta_db: str, conv_id: str, checker: str,
                 Anio_Revision      = ?,
                 Sustento_Respuesta = ?
             WHERE ConversationID = ?
+              AND Conformidad = 'Pendiente'
         """, (checker, fecha_rev, hora_rev, mes_rev,
               anio_rev, ruta_respuesta, conv_id))
         conn.commit()
