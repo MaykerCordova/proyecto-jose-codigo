@@ -31,7 +31,8 @@ EXCEL_OUTPUT        = BASE_DIR / "output" / f"analisis_{COMERCIO_NOMBRE}.xlsx"
 SOLO_APROBADAS = False
 
 # ─── FILA DE ENCABEZADO ──────────────────────────────────────────────────────
-SKIPROWS = 3    # El header está en la fila 4 → saltar las 3 primeras
+SKIPROWS = 4    # El header está en la fila 5 → saltar las 4 primeras
+                # Nota: ajustar si cambias de comercio y el journal tiene diferente estructura
 
 # =============================================================================
 #  DICCIONARIO DE COLUMNAS
