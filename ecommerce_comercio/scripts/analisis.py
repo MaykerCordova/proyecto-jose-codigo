@@ -36,6 +36,13 @@ from datetime import datetime
 from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 from openpyxl.utils import get_column_letter
 
+# sklearn opcional — para árbol de decisión de monto
+try:
+    from sklearn.tree import DecisionTreeClassifier
+    HAS_SKLEARN = True
+except ImportError:
+    HAS_SKLEARN = False
+
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
@@ -397,6 +404,161 @@ if "DECIL_MONTO" in df.columns:
     df_deciles = agg_d.reset_index()
 else:
     df_deciles = pd.DataFrame()
+
+# ── Hoja 12b: Rango óptimo calculado con datos reales ─────────────────────
+print("[12b] Rango optimo de monto...")
+if has_ind and n_fraudes > 0:
+    s_f  = df.loc[mask_f,    col_monto].dropna()
+    s_n  = df.loc[mask_n,    col_monto].dropna()
+    s_nf = df.loc[mask_no_f, col_monto].dropna()
+
+    f_min = round(s_f.min(),           2)
+    f_p50 = round(s_f.median(),        2)
+    f_p90 = round(s_f.quantile(0.90),  2)
+    f_p95 = round(s_f.quantile(0.95),  2)
+    f_p99 = round(s_f.quantile(0.99),  2)
+    f_max = round(s_f.max(),           2)
+    n_med = round(s_n.median(), 2) if len(s_n) > 0 else 0
+
+    # Deciles con TASA_F% >= 5% → rango óptimo basado en comportamiento real
+    if not df_deciles.empty and "TASA_F%" in df_deciles.columns:
+        dec_hot = df_deciles[df_deciles["TASA_F%"] >= 5.0]
+        if len(dec_hot) > 0:
+            rango_dec_lo  = round(float(dec_hot["Monto_min"].min()), 2)
+            rango_dec_hi  = round(float(dec_hot["Monto_max"].max()), 2)
+            pct_en_rango  = round(float(dec_hot["N_F"].sum()) / n_fraudes * 100, 1)
+        else:
+            rango_dec_lo, rango_dec_hi, pct_en_rango = f_min, f_p90, 0.0
+    else:
+        rango_dec_lo, rango_dec_hi, pct_en_rango = f_min, f_p90, 0.0
+
+    # ¿Cuántos fraudes y no-fraudes caen en cada techo?
+    def pct_nof_bajo(techo):
+        return round((s_nf <= techo).sum() / len(s_nf) * 100, 1) if len(s_nf) > 0 else 0
+
+    df_rango_opt = pd.DataFrame([
+        {"Descripcion": "Piso — F_Min",              "Monto_S/": f_min, "Pct_F_capturado%": 100.0, "Pct_noFraude_afectado%": pct_nof_bajo(f_min), "Recomendacion": "Limite inferior — no bloquear por debajo"},
+        {"Descripcion": "F_Mediana",                  "Monto_S/": f_p50, "Pct_F_capturado%": 50.0,  "Pct_noFraude_afectado%": pct_nof_bajo(f_p50), "Recomendacion": "50% del fraude esta por debajo de este monto"},
+        {"Descripcion": "Techo P90 — RECOMENDADO",   "Monto_S/": f_p90, "Pct_F_capturado%": 90.0,  "Pct_noFraude_afectado%": pct_nof_bajo(f_p90), "Recomendacion": "★ Bloquear monto <= P90 captura 90% fraude"},
+        {"Descripcion": "Techo P95",                  "Monto_S/": f_p95, "Pct_F_capturado%": 95.0,  "Pct_noFraude_afectado%": pct_nof_bajo(f_p95), "Recomendacion": "Captura 95% pero afecta mas clientes normales"},
+        {"Descripcion": "Techo P99",                  "Monto_S/": f_p99, "Pct_F_capturado%": 99.0,  "Pct_noFraude_afectado%": pct_nof_bajo(f_p99), "Recomendacion": "Riesgo de bloquear montos altos legitimos"},
+        {"Descripcion": "Ticket normal (N_Mediana)",  "Monto_S/": n_med, "Pct_F_capturado%": None,   "Pct_noFraude_afectado%": 50.0,                "Recomendacion": "Referencia: ticket promedio de cliente normal"},
+        {"Descripcion": f"Rango deciles calientes (TASA>=5%): S/{rango_dec_lo}-{rango_dec_hi}",
+                                                       "Monto_S/": rango_dec_hi, "Pct_F_capturado%": pct_en_rango, "Pct_noFraude_afectado%": None, "Recomendacion": f"Captura {pct_en_rango}% fraude segun analisis de deciles"},
+    ])
+else:
+    df_rango_opt = pd.DataFrame()
+
+# ── Hoja 12c: Rangos de referencia por rubro con tasa real ────────────────
+print("[12c] Rangos por rubro...")
+from config import RANGOS_MONTO_RUBRO
+rows_rubro = []
+for rubro, cortes in RANGOS_MONTO_RUBRO.items():
+    for i in range(len(cortes) - 1):
+        lo, hi = cortes[i], cortes[i + 1]
+        sub = df[(df[col_monto] >= lo) & (df[col_monto] < hi)]
+        n_sub   = len(sub)
+        n_f_sub = int((sub[col_ind] == "F").sum()) if has_ind else 0
+        n_n_sub = int((sub[col_ind] == "N").sum()) if has_ind else 0
+        tasa    = round(n_f_sub / n_sub * 100, 2) if n_sub > 0 else 0
+        etiq_hi = str(hi) if hi < 99999 else "MAX"
+        rows_rubro.append({
+            "Rubro"       : rubro,
+            "Banda_Monto" : f"S/{lo} – S/{etiq_hi}",
+            "N_trx"       : n_sub,
+            "N_F"         : n_f_sub,
+            "N_Normal"    : n_n_sub,
+            "TASA_F%"     : tasa,
+            "Semaforo"    : "★ ALTO" if tasa >= 5 else ("⚠ MEDIO" if tasa >= 2 else "✓ BAJO"),
+        })
+df_rangos_rubro = pd.DataFrame(rows_rubro) if rows_rubro else pd.DataFrame()
+
+# ── Hoja 12d: Árbol de decisión (cortes óptimos de monto) ─────────────────
+print("[12d] Arbol de decision de monto...")
+df_arbol = pd.DataFrame()
+if HAS_SKLEARN and has_ind and n_fraudes > 0 and n_no_fraude > 0:
+    try:
+        X_t = df[[col_monto]].fillna(0).values
+        y_t = mask_f.astype(int).values
+        min_leaf = max(10, int(len(df) * 0.005))
+        tree = DecisionTreeClassifier(max_depth=4, min_samples_leaf=min_leaf, random_state=42)
+        tree.fit(X_t, y_t)
+
+        umbrales = sorted({
+            round(t, 2) for t in tree.tree_.threshold if t != -2
+        })
+        cortes_t = [0.0] + umbrales + [float(df[col_monto].max()) + 1]
+        rows_tree = []
+        for i in range(len(cortes_t) - 1):
+            lo_t, hi_t = cortes_t[i], cortes_t[i + 1]
+            sub_t   = df[(df[col_monto] >= lo_t) & (df[col_monto] < hi_t)]
+            n_st    = len(sub_t)
+            n_f_st  = int((sub_t[col_ind] == "F").sum()) if has_ind else 0
+            n_n_st  = int((sub_t[col_ind] == "N").sum()) if has_ind else 0
+            tasa_st = round(n_f_st / n_st * 100, 2) if n_st > 0 else 0
+            pct_f_c = round(n_f_st / n_fraudes * 100, 1) if n_fraudes > 0 else 0
+            rows_tree.append({
+                "Banda_Arbol"        : f"S/{round(lo_t,2)} – S/{round(hi_t,2)}",
+                "N_trx"              : n_st,
+                "N_F"                : n_f_st,
+                "N_Normal"           : n_n_st,
+                "TASA_F%"            : tasa_st,
+                "Pct_fraude_total%"  : pct_f_c,
+                "Accion"             : "★ BLOQUEAR" if tasa_st >= 5 else ("⚠ REVISAR" if tasa_st >= 2 else "✓ PASAR"),
+            })
+        df_arbol = pd.DataFrame(rows_tree)
+        print(f"   Arbol: {len(umbrales)} cortes encontrados: {umbrales}")
+    except Exception as e:
+        print(f"   [!] Error en arbol: {e}")
+else:
+    if not HAS_SKLEARN:
+        print("   [!] scikit-learn no instalado — pip install scikit-learn")
+
+# ── Hoja 12e: Interacción monto × variables categóricas ───────────────────
+print("[12e] Interaccion monto x categoricas...")
+VARS_CAT_MONTO = [
+    ("Tipo_Producto", "TIPO_PRODUCTO_TEXTO"),
+    ("Segmento",      "SEG_NOMBRE"),
+    ("Marca",         "MARCA_TARJETA"),
+    ("ECI_3DS",       "SEGURO"),
+    ("BIN_top10",     col_bin),
+]
+rows_inter = []
+for label, var in VARS_CAT_MONTO:
+    if var not in df.columns or not has_ind:
+        continue
+    top_cats = df[var].value_counts().head(10 if var == col_bin else 50).index
+    for cat in top_cats:
+        sub_c   = df[df[var] == cat]
+        s_f_c   = sub_c.loc[sub_c[col_ind] == "F",  col_monto].dropna()
+        s_n_c   = sub_c.loc[sub_c[col_ind] == "N",  col_monto].dropna()
+        s_nf_c  = sub_c.loc[sub_c[col_ind] != "F",  col_monto].dropna()
+        if len(s_f_c) < 2:
+            continue
+        f_med_c = round(s_f_c.median(), 2)
+        n_med_c = round(s_n_c.median(), 2) if len(s_n_c) > 0 else None
+        ratio_c = round(f_med_c / n_med_c, 2) if n_med_c and n_med_c > 0 else None
+        rows_inter.append({
+            "Dimension"        : label,
+            "Categoria"        : cat,
+            "N_F"              : len(s_f_c),
+            "F_Mediana_S/"     : f_med_c,
+            "F_P90_S/"         : round(s_f_c.quantile(0.90), 2),
+            "N_N"              : len(s_n_c),
+            "N_Mediana_S/"     : n_med_c,
+            "Ratio_F_vs_N"     : ratio_c,   # <1 = fraude gasta menos que normal
+            "TASA_F%"          : round(len(s_f_c) / len(sub_c) * 100, 2) if len(sub_c) > 0 else 0,
+            "Interpretacion"   : (
+                "Fraude gasta MENOS que normal (card testing)" if ratio_c and ratio_c < 0.8
+                else ("Fraude gasta MAS que normal (alto valor)" if ratio_c and ratio_c > 1.5
+                      else "Monto similar fraude y normal")
+            ),
+        })
+df_interaccion_monto = (
+    pd.DataFrame(rows_inter)
+      .sort_values(["Dimension", "TASA_F%"], ascending=[True, False])
+    if rows_inter else pd.DataFrame()
+)
 
 # ── Hoja 13: Apertura último decil ────────────────────────────────────────
 print("[13] Apertura último decil...")
@@ -828,22 +990,108 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
             "Ticket promedio de F vs G/B define si los fraudes son de alto o bajo importe.")
         t_autofit(ws)
 
-    # ── 12: Deciles de Monto ──────────────────────────────────────────────
+    # ── 12: Análisis Completo de Monto ────────────────────────────────────
+    sn = "12_Deciles_Monto"
+    ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+    fa  = 1
+    NC  = 12  # ancho máximo de columnas para la hoja
+    t_titulo(ws, fa, NC, "ANÁLISIS COMPLETO DE MONTO — DECILES · RANGOS · ÁRBOL · INTERACCIONES"); fa += 1
+    t_titulo(ws, fa, NC,
+        "A: Deciles  |  B: Rango óptimo calculado  |  "
+        "C: Rangos por rubro  |  D: Árbol de decisión  |  E: Interacción monto × variables",
+        fill=FS); fa += 1
+
+    # ── A: Deciles ────────────────────────────────────────────────────────
     if not df_deciles.empty:
-        sn = "12_Deciles_Monto"; nc = len(df_deciles.columns)
-        df_deciles.to_excel(writer, sheet_name=sn, index=False, startrow=3)
-        ws = writer.sheets[sn]
-        t_titulo(ws, 1, nc, "ANÁLISIS DE FRAUDE POR DECIL DE MONTO")
-        t_titulo(ws, 2, nc,
-            "Decil 1 = montos más bajos | Decil 10 = montos más altos | "
-            "TASA_F% = fraudes en ese decil / total del decil", fill=FS)
-        t_encabezado(ws, 4)
-        t_interp(ws, ws.max_row + 1, nc,
-            "Si TASA_F% es mayor en los deciles altos (8-10), el fraude es de ticket alto: "
-            "impacto económico mayor pero menor volumen. Si es mayor en deciles bajos (1-3), "
-            "puede ser card testing con montos pequeños para probar tarjetas. "
-            "Ver hoja 13 para apertura del decil 10.")
-        t_autofit(ws)
+        nc_a = len(df_deciles.columns)
+        t_titulo(ws, fa, nc_a, "A. DECILES DE MONTO — TASA_F% POR DECIL", fill=FS); fa += 1
+        fa = escribir_df(ws, df_deciles, fa, reset_idx=True)
+        t_interp(ws, fa, nc_a,
+            "Decil 1 = montos más bajos. TASA_F% alta en deciles 3-4 = card testing (bajo monto). "
+            "TASA_F% alta en deciles 8-10 = fraude de alto valor. "
+            "Ver sección B para el rango exacto a bloquear derivado de estos datos."); fa += 2
+
+    # ── B: Rango óptimo calculado ─────────────────────────────────────────
+    if not df_rango_opt.empty:
+        nc_b = len(df_rango_opt.columns)
+        t_titulo(ws, fa, nc_b, "B. RANGO ÓPTIMO CALCULADO CON LOS DATOS REALES", fill=FS); fa += 1
+        fa = escribir_df(ws, df_rango_opt, fa, reset_idx=True)
+        t_interp(ws, fa, nc_b,
+            "★ Techo P90 = umbral RECOMENDADO para regla de bloqueo directo. "
+            "Captura el 90% del fraude con el menor daño colateral posible. "
+            "Pct_noFraude_afectado% indica cuántas txn normales caerían bajo ese techo "
+            "(quieres que este número sea bajo). "
+            "Si F_Mediana ≈ N_Mediana, el monto solo no discrimina — "
+            "combinar con BIN u otro predictor."); fa += 2
+
+    # ── C: Rangos por rubro ───────────────────────────────────────────────
+    if not df_rangos_rubro.empty:
+        nc_c = len(df_rangos_rubro.columns)
+        t_titulo(ws, fa, nc_c,
+            "C. RANGOS DE REFERENCIA POR RUBRO — TASA_F% REAL EN CADA BANDA", fill=FS); fa += 1
+        t_titulo(ws, fa, nc_c,
+            "Rubros: RETAIL_GRANDE (Saga/Ripley) | STREAMING (Netflix/Spotify) | "
+            "GAMING (Steam/PS) | MARKETPLACE (Amazon/ML) | REMESAS | OTROS", fill=FS); fa += 1
+        # Colorear filas según semáforo
+        fila_ini_c = fa
+        for _, row in df_rangos_rubro.iterrows():
+            cols_r = list(df_rangos_rubro.columns)
+            sem = str(row.get("Semaforo", ""))
+            fl_sem = FF if "ALTO" in sem else (FY if "MEDIO" in sem else FG_)
+            for j, col_name in enumerate(cols_r, start=1):
+                v = row[col_name]
+                v = round(v, 4) if isinstance(v, float) else v
+                c = ws.cell(row=fa, column=j, value=v)
+                c.fill = fl_sem; c.font = fN; c.alignment = AC; c.border = BT
+            fa += 1
+        t_interp(ws, fa, nc_c,
+            "★ ALTO (TASA_F% >= 5%) = banda caliente en este comercio — candidata a regla de bloqueo. "
+            "⚠ MEDIO (2-5%) = vigilar. ✓ BAJO (<2%) = normal. "
+            "Identifica el rubro más parecido al comercio analizado "
+            "y usa sus bandas como punto de partida para calibrar umbrales."); fa += 2
+
+    # ── D: Árbol de decisión ──────────────────────────────────────────────
+    t_titulo(ws, fa, 8, "D. ÁRBOL DE DECISIÓN — CORTES ÓPTIMOS DE MONTO (scikit-learn)", fill=FS); fa += 1
+    if not df_arbol.empty:
+        nc_d = len(df_arbol.columns)
+        for _, row in df_arbol.iterrows():
+            accion = str(row.get("Accion", ""))
+            fl_d = FF if "BLOQUEAR" in accion else (FY if "REVISAR" in accion else FG_)
+            for j, col_name in enumerate(df_arbol.columns, start=1):
+                v = row[col_name]
+                v = round(v, 4) if isinstance(v, float) else v
+                c = ws.cell(row=fa, column=j, value=v)
+                c.fill = fl_d; c.font = fN; c.alignment = AC; c.border = BT
+            fa += 1
+        t_interp(ws, fa, nc_d,
+            "El árbol calcula automáticamente los cortes de monto que mejor separan fraude de no-fraude. "
+            "★ BLOQUEAR = TASA_F% >= 5% en esa banda — candidata a regla directa. "
+            "⚠ REVISAR = TASA_F% 2-5% — considerar revisión manual. "
+            "✓ PASAR = TASA_F% < 2% — riesgo bajo, no bloquear. "
+            "Combinar la banda BLOQUEAR con BIN o producto para mayor precisión."); fa += 2
+    else:
+        ws.cell(row=fa, column=1,
+            value="scikit-learn no instalado. Ejecutar: pip install scikit-learn")
+        fa += 2
+
+    # ── E: Interacción monto × categóricas ───────────────────────────────
+    if not df_interaccion_monto.empty:
+        nc_e = len(df_interaccion_monto.columns)
+        t_titulo(ws, fa, nc_e,
+            "E. INTERACCIÓN MONTO × VARIABLES CATEGÓRICAS", fill=FS); fa += 1
+        t_titulo(ws, fa, nc_e,
+            "F_Mediana vs N_Mediana por cada categoría | "
+            "Ratio_F_vs_N < 1 = fraude gasta menos (card testing) | "
+            "> 1 = fraude de alto valor", fill=FS); fa += 1
+        fa = escribir_df(ws, df_interaccion_monto, fa, reset_idx=True)
+        t_interp(ws, fa, nc_e,
+            "Lee por Dimension: dentro de cada tipo de producto / segmento / BIN, "
+            "¿el monto del fraude difiere del monto normal? "
+            "Ratio_F_vs_N < 0.8 = fraude gasta MENOS que el cliente normal (card testing típico). "
+            "Ratio > 1.5 = fraude de ticket alto selectivo. "
+            "Combinar Categoria + banda de monto para reglas más precisas que solo el BIN."); fa += 2
+
+    t_autofit(ws)
 
     # ── 13: Apertura Decil 10 ─────────────────────────────────────────────
     sn = "13_Apertura_Decil10"
@@ -961,20 +1209,57 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
     t_titulo(ws, fa, 14,
         "SCORE_RIESGO 0-9 (suma de 9 flags) | "
         "BAJO=0 | MEDIO=1 | ALTO=2-3 | MUY_ALTO=4+", fill=FS); fa += 1
+
+    # ── AVISO: score calibrado solo para TC ──────────────────────────────
+    aviso_tc = (
+        "⚠ IMPORTANTE — SCORE DE RIESGO CALIBRADO SOLO PARA TARJETA DE CRÉDITO (TC):  "
+        "Los flags que componen el SCORE_RIESGO (velocidad, monto acumulado, CVV fail, etc.) "
+        "fueron diseñados y calibrados sobre el comportamiento de TC. "
+        "Para TD (Débito) el score puede subestimar el riesgo — "
+        "usar las reglas BIN + monto directas en lugar del score para TD."
+    )
+    ws.merge_cells(start_row=fa, start_column=1, end_row=fa, end_column=14)
+    c_av = ws.cell(row=fa, column=1, value=aviso_tc)
+    c_av.fill = PatternFill("solid", fgColor="FF0000")
+    c_av.font = Font(color="FFFFFF", bold=True, size=10)
+    c_av.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+    c_av.border = BT
+    ws.row_dimensions[fa].height = 55
+    fa += 2
+
     if not df_riesgo.empty:
-        t_titulo(ws, fa, df_riesgo.shape[1] + 1, "PERFIL_RIESGO × INDICADOR", fill=FS); fa += 1
+        t_titulo(ws, fa, df_riesgo.shape[1] + 1, "PERFIL_RIESGO × INDICADOR — TODOS", fill=FS); fa += 1
         fa = escribir_df(ws, df_riesgo, fa)
         t_interp(ws, fa, df_riesgo.shape[1] + 1,
             "Un score bien calibrado concentra F en MUY_ALTO y deja BAJO con TASA_F% mínima. "
             "Si MUY_ALTO tiene TASA_F% > 50% el score discrimina muy bien. "
             "Si BAJO tiene TASA_F% similar a MUY_ALTO hay que revisar los 9 componentes del score."); fa += 2
-    if not df_score.empty:
+
+    # ── Score separado TC vs TD ───────────────────────────────────────────
+    if not df_score.empty and "TIPO_PRODUCTO_TEXTO" in df.columns:
+        for tipo_prod in ["Credito", "Debito"]:
+            df_sub_tp = df[df["TIPO_PRODUCTO_TEXTO"].str.contains(tipo_prod, case=False, na=False)]
+            if len(df_sub_tp) == 0:
+                continue
+            mask_f_tp = (df_sub_tp[col_ind] == "F") if has_ind else pd.Series(False, index=df_sub_tp.index)
+            sc_tp = df_sub_tp.groupby("SCORE_RIESGO", observed=True).agg(
+                N    = (col_monto, "count"),
+                N_F  = (col_ind,   lambda x: (x == "F").sum()),
+            ).reset_index()
+            sc_tp["TASA_F%"] = (sc_tp["N_F"] / sc_tp["N"] * 100).round(2)
+            label_tp = f"SCORE × INDICADOR — Solo {tipo_prod.upper()} (TC)" if "Cred" in tipo_prod else f"SCORE × INDICADOR — Solo {tipo_prod.upper()} (TD) ⚠ score no calibrado para TD"
+            t_titulo(ws, fa, sc_tp.shape[1], label_tp, fill=FS); fa += 1
+            fa = escribir_df(ws, sc_tp, fa, reset_idx=True)
+            t_interp(ws, fa, sc_tp.shape[1],
+                f"{'Si el score discrimina bien en TC (Credito), TASA_F% debe subir claramente con el score. ' if tipo_prod=='Credito' else 'Para TD (Debito) el score puede no discriminar — ver hojas 6 y 12 para reglas basadas en BIN y monto que si funcionan para TD.'}"
+            ); fa += 2
+    elif not df_score.empty:
         t_titulo(ws, fa, df_score.shape[1], "DISTRIBUCIÓN DE SCORE_RIESGO (0-9) × INDICADOR", fill=FS); fa += 1
         fa = escribir_df(ws, df_score, fa, reset_idx=True)
         t_interp(ws, fa, df_score.shape[1],
-            "Score 0 = ningún flag activo, Score 9 = todos los flags activos. "
-            "Observar en qué puntaje la TASA_F% supera el umbral de decisión para una regla de bloqueo. "
-            "Típicamente score ≥ 4 captura la mayoría de fraudes con bajo impacto en buenas.")
+            "Score 0 = ningún flag activo. Score 9 = todos los flags activos. "
+            "Observar en qué puntaje la TASA_F% supera el umbral de decisión. "
+            "RECORDAR: score calibrado para TC — para TD usar reglas de BIN + monto.")
     t_autofit(ws)
 
     # ── 19: Recomendaciones de Regla ──────────────────────────────────────
