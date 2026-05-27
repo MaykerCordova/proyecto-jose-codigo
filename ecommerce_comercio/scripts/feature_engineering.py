@@ -88,8 +88,31 @@ col_cli   = C["id_cliente"]
 col_com   = C["comercio_nom"]
 col_fh    = C["fecha_hora"]
 
-df[col_fh] = pd.to_datetime(df[col_fh], errors="coerce")
-df = df.sort_values(col_fh).reset_index(drop=True)
+# FECHA_HORA la crea consolidar.py — si no existe, crear columna vacía y avisar
+if col_fh not in df.columns:
+    print(f"\n⚠️  '{col_fh}' no encontrada en el parquet.")
+    print(f"   Causa: consolidar.py no encontró la columna de fecha del Monitor.")
+    print(f"   Solución: ejecuta diagnostico_columnas.py para ver los nombres reales")
+    print(f"   y actualiza config.py → 'fecha_trx' y 'hora_trx'.")
+    print(f"   Continuando sin fechas (ventanas temporales quedarán en 0/NaT)...\n")
+    df[col_fh] = pd.NaT
+else:
+    df[col_fh] = pd.to_datetime(df[col_fh], errors="coerce")
+
+# Solo ordenar si hay fechas válidas
+if df[col_fh].notna().any():
+    df = df.sort_values(col_fh).reset_index(drop=True)
+
+# Columnas clave con fallback
+if col_cli not in df.columns:
+    print(f"⚠️  id_cliente '{col_cli}' no encontrado — usando índice como cliente")
+    df[col_cli] = df.index.astype(str)
+if col_com not in df.columns:
+    print(f"⚠️  comercio_nom '{col_com}' no encontrado — usando 'SIN_COMERCIO'")
+    df[col_com] = "SIN_COMERCIO"
+if col_monto not in df.columns:
+    print(f"⚠️  monto '{col_monto}' no encontrado — usando 0")
+    df[col_monto] = 0.0
 
 print(f"\n  Filas            : {len(df):,}")
 print(f"  Clientes únicos  : {df[col_cli].nunique():,}")
