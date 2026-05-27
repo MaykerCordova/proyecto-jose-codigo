@@ -773,7 +773,7 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
     ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
     fa = 1
     t_titulo(ws, fa, 16, "VELOCIDAD — GAP ENTRE TRANSACCIONES Y VENTANAS TEMPORALES POR CLIENTE"); fa += 1
-    t_titulo(ws, fa, 16, "Media / Mediana / P90 por indicador | Compara columna F vs G/B", fill=FS); fa += 1
+    t_titulo(ws, fa, 16, "Media / Mediana / P90 por indicador F / G / D / N — columnas separadas por indicador", fill=FS); fa += 1
     if not df_gap.empty:
         t_titulo(ws, fa, df_gap.shape[1] + 1, "DISTRIBUCIÓN DE GAP (tiempo entre txn del mismo cliente)", fill=FS); fa += 1
         fa = escribir_df(ws, df_gap.reset_index(), fa, reset_idx=False, color_ind=False)
