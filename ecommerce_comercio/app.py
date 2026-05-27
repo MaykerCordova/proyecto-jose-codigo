@@ -152,12 +152,16 @@ if seg_sel and "SEG_NOMBRE" in df.columns:
 if eci_sel and "SEGURO" in df.columns:
     df = df[df["SEGURO"].isin(eci_sel)]
 
-mask_f_df  = (df[col_ind] == "F") if has_ind else pd.Series(False, index=df.index)
-mask_bg_df = df[col_ind].isin({"G","B"}) if has_ind else pd.Series(False, index=df.index)
-n_f  = int(mask_f_df.sum())
-n_bg = int(mask_bg_df.sum())
-n_tot= len(df)
-tasa_f = round(n_f / n_tot * 100, 3) if n_tot > 0 else 0
+mask_f_df   = (df[col_ind] == "F")          if has_ind else pd.Series(False, index=df.index)
+mask_bg_df  = df[col_ind].isin({"G","B"})  if has_ind else pd.Series(False, index=df.index)
+mask_n_df   = (df[col_ind] == "N")          if has_ind else pd.Series(False, index=df.index)
+mask_nof_df = (df[col_ind] != "F")          if has_ind else pd.Series(True,  index=df.index)
+n_f     = int(mask_f_df.sum())
+n_bg    = int(mask_bg_df.sum())
+n_norm  = int(mask_n_df.sum())
+n_nof   = int(mask_nof_df.sum())   # todo lo que no es fraude
+n_tot   = len(df)
+tasa_f  = round(n_f / n_tot * 100, 3) if n_tot > 0 else 0
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -499,31 +503,47 @@ with tabs[4]:
     if not has_ind:
         st.warning("Requiere columna indicador para calcular efectividad.")
     else:
-        n_f_total  = int(mask_f_df.sum())
-        n_bg_total = int(mask_bg_df.sum())
+        # Totales de referencia para calcular porcentajes
+        n_f_total   = int(mask_f_df.sum())
+        n_bg_total  = int(mask_bg_df.sum())
+        n_n_total   = int(mask_n_df.sum())
+        n_nof_total = int(mask_nof_df.sum())
 
         def calcular_efectividad(mask_regla):
-            n_imp = int(mask_regla.sum())
-            n_f_c = int((mask_regla & mask_f_df).sum())
-            n_b_a = int((mask_regla & mask_bg_df).sum())
-            pct_f = round(n_f_c / n_f_total * 100, 2) if n_f_total > 0 else 0
-            pct_b = round(n_b_a / n_bg_total * 100, 2) if n_bg_total > 0 else 0
-            prec  = round(n_f_c / n_imp * 100, 2) if n_imp > 0 else 0
-            ratio = round(pct_f / pct_b, 2) if pct_b > 0 else (999.0 if pct_f > 0 else 0.0)
-            return n_imp, n_f_c, n_b_a, pct_f, pct_b, prec, ratio
+            n_imp   = int(mask_regla.sum())
+            n_f_c   = int((mask_regla & mask_f_df).sum())
+            n_g_a   = int((mask_regla & mask_bg_df).sum())    # G/B revisadas
+            n_n_a   = int((mask_regla & mask_n_df).sum())     # N normales (el grueso)
+            n_nof_a = int((mask_regla & mask_nof_df).sum())   # total no-fraude
+            pct_f   = round(n_f_c   / n_f_total   * 100, 2) if n_f_total   > 0 else 0
+            pct_g   = round(n_g_a   / n_bg_total  * 100, 2) if n_bg_total  > 0 else 0
+            pct_n   = round(n_n_a   / n_n_total   * 100, 2) if n_n_total   > 0 else 0
+            pct_nof = round(n_nof_a / n_nof_total * 100, 2) if n_nof_total > 0 else 0
+            prec    = round(n_f_c   / n_imp * 100, 2) if n_imp > 0 else 0
+            ratio   = round(pct_f / pct_nof, 2) if pct_nof > 0 else (999.0 if pct_f > 0 else 0.0)
+            return n_imp, n_f_c, n_g_a, n_n_a, pct_f, pct_g, pct_n, pct_nof, prec, ratio
 
-        def mostrar_resultado(n_imp, n_f_c, n_b_a, pct_f, pct_b, prec, ratio):
+        def mostrar_resultado(n_imp, n_f_c, n_g_a, n_n_a, pct_f, pct_g, pct_n, pct_nof, prec, ratio):
             ca, cb, cc, cd = st.columns(4)
-            ca.metric("Txn impactadas", f"{n_imp:,}")
-            cb.metric("Fraudes capturados", f"{n_f_c:,}", delta=f"{pct_f}% del total")
-            cc.metric("Buenas afectadas",   f"{n_b_a:,}", delta=f"{pct_b}% del total", delta_color="inverse")
-            cd.metric("Precisión / Ratio F÷BG", f"{prec}% / {ratio}x")
+            ca.metric("Txn bloqueadas", f"{n_imp:,}",
+                      delta=f"{round(n_imp/n_tot*100,1)}% del total")
+            cb.metric("Fraudes capturados", f"{n_f_c:,}",
+                      delta=f"{pct_f}% de los fraudes")
+            cc.metric("Normales (N) afectadas", f"{n_n_a:,}",
+                      delta=f"{pct_n}% de las N", delta_color="inverse")
+            cd.metric("Precisión / Ratio", f"{prec}% / {ratio}x")
+            st.caption(
+                f"Buenas (G) afectadas: **{n_g_a:,}** ({pct_g}%)  ·  "
+                f"Total no-fraude afectado: **{n_imp - n_f_c:,}** ({pct_nof}% de todos los no-fraude)"
+            )
             if ratio >= 3 and pct_f >= 10:
-                st.success("Regla efectiva: ratio ≥ 3 y captura ≥ 10% de fraudes.")
+                st.success(f"✅ Regla efectiva: captura {pct_f}% del fraude afectando solo {pct_nof}% de clientes.")
+            elif pct_n > 20:
+                st.error(f"⚠️ Alto daño colateral: {pct_n}% de las transacciones normales (N) serían bloqueadas.")
             elif pct_f >= 30:
-                st.warning("Alta captura, pero revisar el impacto en buenas.")
+                st.warning(f"Captura alta ({pct_f}%) pero revisa el impacto en N ({pct_n}%).")
             else:
-                st.info("Ajusta el umbral para mejorar la captura.")
+                st.info("Ajusta el umbral para mejorar la captura o reducir el impacto en N.")
 
         st.subheader("Regla 1: Monto acumulado en 24h (MNT_CLIENTE_24H)")
         if "MNT_CLIENTE_24H" in df.columns:

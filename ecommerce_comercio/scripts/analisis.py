@@ -79,10 +79,14 @@ IND_ORDEN = ["F", "G", "B", "P", "D", "N"]
 has_ind   = col_ind in df.columns
 ind_pres  = [i for i in IND_ORDEN if has_ind and i in df[col_ind].unique()]
 
-mask_f  = (df[col_ind] == "F")          if has_ind else pd.Series(False, index=df.index)
-mask_bg = df[col_ind].isin({"G", "B"}) if has_ind else pd.Series(False, index=df.index)
-n_fraudes = int(mask_f.sum())
-n_buenas  = int(mask_bg.sum())
+mask_f      = (df[col_ind] == "F")           if has_ind else pd.Series(False, index=df.index)
+mask_bg     = df[col_ind].isin({"G", "B"})  if has_ind else pd.Series(False, index=df.index)
+mask_n      = (df[col_ind] == "N")           if has_ind else pd.Series(False, index=df.index)
+mask_no_f   = (df[col_ind] != "F")           if has_ind else pd.Series(True,  index=df.index)
+n_fraudes   = int(mask_f.sum())
+n_buenas    = int(mask_bg.sum())     # solo G/B (revisadas y liberadas)
+n_normales  = int(mask_n.sum())      # N = transacciones sin alerta (el grueso real)
+n_no_fraude = int(mask_no_f.sum())   # todo lo que NO es fraude (impacto real de una regla)
 
 print(f"  Filas    : {len(df):,}  |  Columnas: {df.shape[1]}")
 if has_ind:
@@ -567,33 +571,48 @@ FLAGS_CONFIG = sorted(c for c in df.columns
                          c.startswith("FLAG_COMBO_"))
 TODOS_FLAGS = [f for f in FLAGS_FIJOS + FLAGS_CONFIG if f in df.columns]
 
-rows_rec = []
+rows_rec  = []
 total_trx = len(df)
 for flag in TODOS_FLAGS:
-    mask_flag = df[flag].fillna(0).astype(bool)
-    n_impacta = int(mask_flag.sum())
+    mask_flag  = df[flag].fillna(0).astype(bool)
+    n_impacta  = int(mask_flag.sum())
     if n_impacta == 0:
         continue
-    n_f_cap  = int((mask_flag & mask_f).sum())
-    n_bg_af  = int((mask_flag & mask_bg).sum())
-    pct_f    = round(n_f_cap / n_fraudes * 100, 2) if n_fraudes > 0 else 0.0
-    pct_bg   = round(n_bg_af / n_buenas  * 100, 2) if n_buenas  > 0 else 0.0
-    pct_imp  = round(n_impacta / total_trx * 100, 2)
-    precision= round(n_f_cap / n_impacta  * 100, 2) if n_impacta > 0 else 0.0
-    ratio    = round(pct_f / pct_bg, 2) if pct_bg > 0 else (999.0 if pct_f > 0 else 0.0)
+    n_f_cap    = int((mask_flag & mask_f).sum())
+    n_g_af     = int((mask_flag & mask_bg).sum())     # G/B — revisadas y liberadas
+    n_n_af     = int((mask_flag & mask_n).sum())      # N  — normales sin alerta
+    n_nof_af   = int((mask_flag & mask_no_f).sum())   # TOTAL no-fraude afectado
+
+    pct_f      = round(n_f_cap  / n_fraudes   * 100, 2) if n_fraudes   > 0 else 0.0
+    pct_g      = round(n_g_af   / n_buenas    * 100, 2) if n_buenas    > 0 else 0.0
+    pct_n      = round(n_n_af   / n_normales  * 100, 2) if n_normales  > 0 else 0.0
+    pct_nof    = round(n_nof_af / n_no_fraude * 100, 2) if n_no_fraude > 0 else 0.0
+    pct_imp    = round(n_impacta / total_trx  * 100, 2)
+    precision  = round(n_f_cap  / n_impacta  * 100, 2) if n_impacta   > 0 else 0.0
+    # Ratio usando el impacto REAL (todo lo que no es F), no solo G
+    ratio_real = round(pct_f / pct_nof, 2) if pct_nof > 0 else (999.0 if pct_f > 0 else 0.0)
     rows_rec.append({
-        "FLAG": flag,
-        "N_impacta": n_impacta,
-        "Pct_trx_afectadas%": pct_imp,
-        "N_fraude_capturado": n_f_cap,
-        "Pct_fraude_capturado%": pct_f,
-        "N_buena_afectada": n_bg_af,
-        "Pct_buena_afectada%": pct_bg,
-        "Precision%": precision,
-        "Ratio_F_vs_BG": ratio,
+        "FLAG"                       : flag,
+        "N_total_impactado"          : n_impacta,
+        "Pct_total_impactado%"       : pct_imp,
+        # ── Fraude ───────────────────────────────────────
+        "N_fraude_capturado"         : n_f_cap,
+        "Pct_fraude_capturado%"      : pct_f,
+        # ── Impacto real (todo lo que no es F) ───────────
+        "N_noFraude_afectado"        : n_nof_af,
+        "Pct_noFraude_afectado%"     : pct_nof,     # ← columna clave para evaluar daño colateral
+        # ── Desglose del daño colateral ──────────────────
+        "N_Normal_afectado(N)"       : n_n_af,
+        "Pct_Normal_afectado%(N)"    : pct_n,        # ← cuántas txn "sin alerta" bloquea la regla
+        "N_Buena_afectada(G)"        : n_g_af,
+        "Pct_Buena_afectada%(G)"     : pct_g,
+        # ── Calidad de la regla ───────────────────────────
+        "Precision%"                 : precision,    # fraudes / total_impactado
+        "Ratio_F_vs_noFraude"        : ratio_real,   # pct_fraude / pct_noFraude (>3 = buena regla)
     })
-df_rec = pd.DataFrame(rows_rec).sort_values("Pct_fraude_capturado%", ascending=False) \
-         if rows_rec else pd.DataFrame()
+df_rec = (pd.DataFrame(rows_rec)
+            .sort_values("Pct_fraude_capturado%", ascending=False)
+          if rows_rec else pd.DataFrame())
 
 # ── Hoja 20: Muestra ──────────────────────────────────────────────────────
 print("[20] Muestra...")
@@ -967,14 +986,16 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
         t_titulo(ws, 1, nc, f"EFECTIVIDAD DE FLAGS COMO REGLAS DE CONTROL — {COMERCIO_NOMBRE}")
         t_titulo(ws, 2, nc,
             "Ordenado por Pct_fraude_capturado% DESC | "
-            "Ratio_F_vs_BG = Pct_fraude_cap / Pct_buena_afectada (mayor = mejor) | "
-            "Precision% = fraudes / total impactado", fill=FS)
+            "Pct_noFraude_afectado% = impacto REAL en clientes (N+G+D+P) | "
+            "Ratio_F_vs_noFraude > 3 = regla efectiva | Precision% = fraudes/total_bloqueado", fill=FS)
         t_encabezado(ws, 4)
         # Resaltar filas con buen ratio (ratio > 3 y pct_f > 10%)
+        col_ratio_idx = 13   # columna Ratio_F_vs_noFraude (índice 0-based = 12, col Excel = 13)
+        col_pctf_idx  = 5    # columna Pct_fraude_capturado%
         for r in ws.iter_rows(min_row=5, max_row=ws.max_row):
             try:
-                pct_f_val = float(r[4].value or 0)
-                ratio_val = float(r[8].value or 0)
+                pct_f_val = float(r[col_pctf_idx - 1].value or 0)
+                ratio_val = float(r[col_ratio_idx - 1].value or 0)
                 if ratio_val >= 3 and pct_f_val >= 10:
                     for c in r:
                         c.fill = FG_; c.font = fN; c.alignment = AC; c.border = BT
@@ -985,11 +1006,12 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
             except Exception:
                 pass
         t_interp(ws, ws.max_row + 1, nc,
-            "Celdas en verde = flags con buena relación fraude capturado vs impacto en clientes buenos. "
-            "Pct_fraude_capturado% alto con Pct_buena_afectada% bajo = regla de alta precisión. "
-            "Ratio_F_vs_BG > 3 indica que por cada 1% de buenas afectadas se captura 3%+ de fraudes. "
-            "Para el correo de control, priorizar flags con Pct_fraude_capturado% > 30% y Ratio > 3. "
-            "N_impacta muestra cuántas transacciones totales dispararían la regla en producción.")
+            "COLUMNAS CLAVE: Pct_fraude_capturado% = cuanto fraude captura la regla. "
+            "Pct_noFraude_afectado% = impacto REAL en produccion (N normales + G buenas + D + P). "
+            "N es el grupo mas grande (transacciones sin alerta) — si esta % es alta, la regla daña muchos clientes normales. "
+            "Ratio_F_vs_noFraude: por cada 1% de no-fraude afectado, cuantos % de fraude captures. "
+            "Ratio >= 3 + Pct_fraude >= 10% = regla candidata para el correo de control. "
+            "Precision% = de cada 100 txn que bloqueas, cuantas son fraude real.")
         t_autofit(ws)
     else:
         ws_tmp = writer.book.create_sheet(sn); writer.sheets[sn] = ws_tmp
