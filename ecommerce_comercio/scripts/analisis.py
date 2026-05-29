@@ -1032,10 +1032,14 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
         t_titulo(ws, fa, nc_c,
             "Rubros: RETAIL_GRANDE (Saga/Ripley) | STREAMING (Netflix/Spotify) | "
             "GAMING (Steam/PS) | MARKETPLACE (Amazon/ML) | REMESAS | OTROS", fill=FS); fa += 1
+        # Header row
+        cols_r = list(df_rangos_rubro.columns)
+        for j, col_name in enumerate(cols_r, start=1):
+            c = ws.cell(row=fa, column=j, value=str(col_name))
+            c.fill = FS; c.font = fH; c.alignment = AC; c.border = BT
+        fa += 1
         # Colorear filas según semáforo
-        fila_ini_c = fa
         for _, row in df_rangos_rubro.iterrows():
-            cols_r = list(df_rangos_rubro.columns)
             sem = str(row.get("Semaforo", ""))
             fl_sem = FF if "ALTO" in sem else (FY if "MEDIO" in sem else FG_)
             for j, col_name in enumerate(cols_r, start=1):
@@ -1054,10 +1058,16 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
     t_titulo(ws, fa, 8, "D. ÁRBOL DE DECISIÓN — CORTES ÓPTIMOS DE MONTO (scikit-learn)", fill=FS); fa += 1
     if not df_arbol.empty:
         nc_d = len(df_arbol.columns)
+        cols_d = list(df_arbol.columns)
+        # Header row
+        for j, col_name in enumerate(cols_d, start=1):
+            c = ws.cell(row=fa, column=j, value=str(col_name))
+            c.fill = FS; c.font = fH; c.alignment = AC; c.border = BT
+        fa += 1
         for _, row in df_arbol.iterrows():
             accion = str(row.get("Accion", ""))
             fl_d = FF if "BLOQUEAR" in accion else (FY if "REVISAR" in accion else FG_)
-            for j, col_name in enumerate(df_arbol.columns, start=1):
+            for j, col_name in enumerate(cols_d, start=1):
                 v = row[col_name]
                 v = round(v, 4) if isinstance(v, float) else v
                 c = ws.cell(row=fa, column=j, value=v)
