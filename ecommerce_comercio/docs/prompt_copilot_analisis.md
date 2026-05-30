@@ -23,6 +23,13 @@ Indicadores de fraude en los datos:
 - P = Pendiente
 - TASA_F% = fraudes / total de transacciones
 
+Variable SCORE — importante:
+- Solo aplica a tarjeta de CRÉDITO (débito no tiene score)
+- Visa: escala 0 a 99
+- Mastercard: escala 0 a 999
+- NO comparar score Visa vs Mastercard directamente — escalas distintas
+- Para débito: no hay score, usar variables de ingeniería (monto, velocidad, BIN)
+
 Criterio para evaluar una regla de control:
 - Ratio_F_vs_noFraude = % fraude capturado / % no-fraude afectado
 - Ratio ≥ 3 = regla efectiva
@@ -31,7 +38,11 @@ Criterio para evaluar una regla de control:
 
 Tu tarea:
 1. Analiza las 20 hojas del Excel adjunto
-2. Identifica el vector principal de fraude (BIN, producto, monto, segmento, velocidad)
+2. Identifica el vector principal de fraude con énfasis en BINs:
+   - Lista los top 3-5 BINs con mayor tasa F%
+   - Para cada BIN caliente: cruzar con segmento, producto, rango de monto y velocidad diaria (hoja 17)
+   - El BIN permite identificar marca, producto (TC/TD) y segmento sin variables adicionales
+   - Evaluar si el bucket de 2 txn/día concentra el fraude para esos BINs específicos
 3. Redacta un informe estructurado con: Resumen Ejecutivo, Hallazgos por Dimensión,
    Patrón del Ataque y Recomendaciones de Reglas
 4. Propón mínimo 2 reglas de control con umbrales específicos,
@@ -57,6 +68,12 @@ Comercio: [NOMBRE COMERCIO]
 Tipo: Ecommerce sin autenticación 3DS (fraude CNP — Card Not Present)
 Periodo: [completar con el rango de fechas del Excel]
 Universo: [N total txn] transacciones | [N fraudes] fraudes | Tasa global: [X]%
+
+Antigüedad del comercio:
+- Periodo de búsqueda: [N meses]
+- Meses con transaccionalidad real: [completar]
+- Si meses activos < 50% del periodo buscado = comercio sospechoso
+  (posible comercio creado para fraude o en fase de ataque inicial)
 
 Indicadores del sistema Monitor (Scotiabank):
 - F = Fraude confirmado por el analista
@@ -86,7 +103,7 @@ ESTRUCTURA DEL EXCEL (20 hojas)
 14_Motivos_Rechazo:   Análisis de transacciones denegadas
 15_CVV_Tokenizadas:   Tipo CVV y billetera digital × indicador
 16_Por_Pais:          Distribución por país de origen
-17_Transac_Diaria:    Txn por cliente por día (1/2/3/4/5+)
+17_Transac_Diaria:    Bucket de txn por cliente por día (1/2/3/4/5/6+ txn) × indicador F/G/N/D — incluye N_trx y N_clientes únicos por bucket. El bucket de 2 txn/día suele concentrar el grueso del fraude en ataques de card testing
 18_Perfil_Riesgo:     Score compuesto 0-9 y perfil BAJO/MEDIO/ALTO/MUY_ALTO
 19_Recomendaciones:   Efectividad de cada flag como regla (Ratio, Precision, impacto N)
 20_Muestra:           500 fraudes con variables de comportamiento
