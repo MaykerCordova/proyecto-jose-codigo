@@ -25,6 +25,11 @@ import polars as pl
 # CONSTANTES DE NEGOCIO — editar aquí cuando cambien las reglas
 # ---------------------------------------------------------------------------
 
+# Fecha de corte global: aplica a TODAS las herramientas.
+# Cambia esta fecha para controlar desde qué mes se muestra la data en Power BI.
+# Poner None para mostrar toda la data sin corte global.
+FECHA_CORTE_GLOBAL: date | None = date(2025, 1, 1)
+
 # RT_CREDITO: hubo migración de herramienta en julio 2025.
 # Datos anteriores distorsionan las visualizaciones → cortamos desde julio.
 FECHA_CORTE_RT_CREDITO = date(2025, 7, 1)
@@ -65,6 +70,9 @@ class PostProcesadorMaster:
 
         lf = pl.scan_parquet(self.ruta_entrada)
 
+        # Filtro global de fecha (aplica antes que cualquier otro)
+        lf = self._filtrar_fecha_global(lf)
+
         # Columnas calculadas primero (BIN6 se necesita para el filtro RT_DEBITO)
         lf = self._agregar_bin_limpio_y_bin6(lf)
         lf = self._corregir_entry_mode(lf)
@@ -82,6 +90,21 @@ class PostProcesadorMaster:
         print(f"  Filas Power BI : {df.height:,}")
         print(f"  Guardado en    : {self.ruta_salida.name}")
         print(f"  Tiempo         : {time.time() - t0:.2f}s")
+
+    # ------------------------------------------------------------------
+    # Filtro global
+    # ------------------------------------------------------------------
+
+    def _filtrar_fecha_global(self, lf: pl.LazyFrame) -> pl.LazyFrame:
+        """
+        Aplica un corte de fecha a TODAS las herramientas.
+        Útil para mostrar solo los últimos N meses en Power BI.
+        Si FECHA_CORTE_GLOBAL es None, no filtra nada.
+        """
+        if FECHA_CORTE_GLOBAL is None:
+            return lf
+        corte = pl.lit(FECHA_CORTE_GLOBAL).cast(pl.Datetime("ms"))
+        return lf.filter(pl.col("fecha") >= corte)
 
     # ------------------------------------------------------------------
     # Columnas calculadas
