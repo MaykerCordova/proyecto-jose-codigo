@@ -3,4 +3,5 @@ polars>=0.20
 pyodbc>=5.0
 matplotlib>=3.7
 numpy>=1.24
-pywin32>=306        # win32com para envío por Outlook (solo Windows)
+scipy>=1.10          # spline interpolation para líneas suavizadas
+pywin32>=306         # win32com para envío por Outlook (solo Windows)

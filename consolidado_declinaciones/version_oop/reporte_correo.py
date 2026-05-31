@@ -109,26 +109,35 @@ class ReporteCorreo:
 
         for herramienta, grupo in df.groupby("herramienta"):
             color = COLORES_HERRAMIENTA.get(herramienta, COLOR_DEFAULT)
-            grupo = grupo.sort_values("dia")
+            grupo = grupo.sort_values("dia").reset_index(drop=True)
+            x_idx = range(len(grupo))
+            y_vals = grupo[columna].values
 
-            # Línea diaria real (fina y transparente, referencia de fondo)
-            ax.plot(
-                grupo["dia"], grupo[columna],
-                color=color, linewidth=1, alpha=0.25,
-                marker="o", markersize=2,
-            )
-            # Línea suavizada: media móvil 7 días (protagonista)
-            suavizado = grupo[columna].rolling(7, min_periods=1).mean()
-            ax.plot(
-                grupo["dia"], suavizado,
-                label=herramienta, color=color, linewidth=2.5,
-            )
-            # Punto T-1 destacado sobre la línea suavizada
+            # Intentar curva spline cúbica (respeta todos los valores, suaviza ángulos)
+            try:
+                from scipy.interpolate import make_interp_spline
+                import numpy as np
+                if len(grupo) >= 4:
+                    x_dense = np.linspace(0, len(grupo) - 1, len(grupo) * 5)
+                    spl = make_interp_spline(list(x_idx), y_vals, k=3)
+                    y_dense = spl(x_dense)
+                    # Mapear x_dense a fechas reales
+                    fechas_dense = pd.to_datetime(
+                        pd.Series(x_dense).apply(
+                            lambda i: grupo["dia"].iloc[min(int(i), len(grupo)-1)]
+                        )
+                    )
+                    ax.plot(fechas_dense, y_dense, label=herramienta, color=color, linewidth=2.2)
+                else:
+                    ax.plot(grupo["dia"], y_vals, label=herramienta, color=color, linewidth=2.2)
+            except ImportError:
+                # Sin scipy: línea simple (ya es razonablemente suave)
+                ax.plot(grupo["dia"], y_vals, label=herramienta, color=color, linewidth=2.2)
+
+            # Punto T-1 destacado (sobre el dato real)
             t1_row = grupo[grupo["dia"] == fecha_t1]
             if not t1_row.empty:
-                idx = t1_row.index[0]
-                val_suav = suavizado.loc[idx]
-                ax.scatter(t1_row["dia"], [val_suav], color=color, s=90, zorder=5)
+                ax.scatter(t1_row["dia"], t1_row[columna], color=color, s=90, zorder=5)
 
         # Línea vertical T-1
         ax.axvline(x=fecha_t1, color="#555555", linestyle="--", linewidth=1, alpha=0.6, label="T-1 (hoy)")
@@ -223,14 +232,18 @@ class ReporteCorreo:
         estado_color = "#D62728" if total_alertas > 0 else "#2CA02C"
         estado_texto = f"⚠ {total_alertas} ALERTA(S) DETECTADA(S)" if total_alertas > 0 else "✔ Comportamiento Normal"
 
-        # Tabla resumen herramientas
+        # Tabla resumen herramientas (cada una con su última fecha disponible)
         filas_resumen = ""
         for _, row in resumen.iterrows():
+            fecha_dato = row.get("fecha_dato", str(fecha_t1))
+            es_hoy     = str(fecha_dato) == str(fecha_t1)
+            color_fecha = "#212529" if es_hoy else "#DC3545"  # rojo si no es T-1
             filas_resumen += f"""
             <tr>
                 <td style="padding:6px 12px;">{row['herramienta']}</td>
                 <td style="padding:6px 12px; text-align:right;">{int(row['transacciones']):,}</td>
                 <td style="padding:6px 12px; text-align:right;">USD {float(row['monto_usd']):,.0f}</td>
+                <td style="padding:6px 12px; text-align:center; color:{color_fecha}; font-size:11px;">{fecha_dato}</td>
             </tr>"""
 
         # Tabla alertas herramienta
@@ -302,6 +315,7 @@ class ReporteCorreo:
                         <th style="padding:8px 12px; text-align:left;">Herramienta</th>
                         <th style="padding:8px 12px; text-align:right;">Transacciones</th>
                         <th style="padding:8px 12px; text-align:right;">Monto Rechazado</th>
+                        <th style="padding:8px 12px; text-align:center;">Fecha dato</th>
                     </tr>
                 </thead>
                 <tbody>{filas_resumen}</tbody>

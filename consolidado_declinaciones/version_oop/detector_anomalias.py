@@ -149,16 +149,16 @@ class DetectorAnomalias:
         diario = diario.sort_values(["herramienta", columna, "dia"])
 
         diario["mean_vol"] = diario.groupby(["herramienta", columna])["volumen"].transform(
-            lambda x: x.shift(1).rolling(self.ventana_dias, min_periods=7).mean()
+            lambda x: x.shift(1).rolling(self.ventana_dias, min_periods=3).mean()
         )
         diario["std_vol"] = diario.groupby(["herramienta", columna])["volumen"].transform(
-            lambda x: x.shift(1).rolling(self.ventana_dias, min_periods=7).std()
+            lambda x: x.shift(1).rolling(self.ventana_dias, min_periods=3).std()
         )
         diario["mean_mto"] = diario.groupby(["herramienta", columna])["monto"].transform(
-            lambda x: x.shift(1).rolling(self.ventana_dias, min_periods=7).mean()
+            lambda x: x.shift(1).rolling(self.ventana_dias, min_periods=3).mean()
         )
         diario["std_mto"] = diario.groupby(["herramienta", columna])["monto"].transform(
-            lambda x: x.shift(1).rolling(self.ventana_dias, min_periods=7).std()
+            lambda x: x.shift(1).rolling(self.ventana_dias, min_periods=3).std()
         )
 
         # Solo T-1
@@ -216,15 +216,39 @@ class DetectorAnomalias:
         )
 
     def _resumen_t1(self, df: pl.DataFrame, fecha_t1: date) -> pd.DataFrame:
-        """Resumen de volumen y monto del día T-1 por herramienta."""
-        return (
+        """
+        Resumen por herramienta mostrando su última fecha disponible.
+        Cada herramienta puede actualizarse en días distintos, así que
+        se muestra la última fecha de cada una en lugar de filtrar
+        estrictamente por el máximo global.
+        """
+        # Última fecha disponible por herramienta (puede diferir entre fuentes)
+        ultimas = (
             df
-            .filter(pl.col("dia") == pl.lit(fecha_t1))
             .group_by("herramienta")
-            .agg([
-                pl.len().alias("transacciones"),
-                pl.col("monto_usd").cast(pl.Float64).sum().alias("monto_usd"),
-            ])
-            .sort("transacciones", descending=True)
+            .agg(pl.col("dia").max().alias("ultima_dia"))
             .to_pandas()
+        )
+
+        filas = []
+        for _, row in ultimas.iterrows():
+            res = (
+                df
+                .filter(
+                    (pl.col("herramienta") == row["herramienta"])
+                    & (pl.col("dia") == pl.lit(row["ultima_dia"]))
+                )
+                .select([
+                    pl.lit(row["herramienta"]).alias("herramienta"),
+                    pl.len().alias("transacciones"),
+                    pl.col("monto_usd").cast(pl.Float64).sum().alias("monto_usd"),
+                    pl.lit(str(row["ultima_dia"])).alias("fecha_dato"),
+                ])
+                .to_pandas()
+            )
+            filas.append(res)
+
+        return (
+            pd.concat(filas, ignore_index=True)
+            .sort_values("transacciones", ascending=False)
         )
