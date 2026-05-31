@@ -127,14 +127,16 @@ class DetectorAnomalias:
             return []
 
         # Agregado diario por herramienta + dimensión
+        # dict.fromkeys elimina duplicados si columna == "herramienta"
+        group_keys = list(dict.fromkeys(["herramienta", columna, "dia"]))
         diario = (
             df
-            .group_by(["herramienta", columna, "dia"])
+            .group_by(group_keys)
             .agg([
                 pl.len().alias("volumen"),
                 pl.col("monto_usd").cast(pl.Float64).sum().alias("monto"),
             ])
-            .sort(["herramienta", columna, "dia"])
+            .sort(group_keys)
             .to_pandas()
         )
 
