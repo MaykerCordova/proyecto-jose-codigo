@@ -102,8 +102,10 @@ class DetectorAnomalias:
             "fecha_t1":             fecha_t1,
             "total_alertas":        total_alertas,
             "alertas_herramienta":  alertas_herramienta,
-            "alertas_comercio":     [a for a in alertas_comercio  if a.es_alerta][:self.top_n],
-            "alertas_bin6":         [a for a in alertas_bin6       if a.es_alerta][:self.top_n],
+            # Siempre top N ordenados por |Z-score|, alerten o no
+            # es_alerta en cada item indica si cruza el umbral
+            "top_comercio":         alertas_comercio[:self.top_n],
+            "top_bin6":             alertas_bin6[:self.top_n],
             "df_evolutivo":         self._preparar_evolutivo(df, fecha_t1),
             "resumen_herramienta":  self._resumen_t1(df, fecha_t1),
         }

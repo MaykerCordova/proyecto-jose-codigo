@@ -88,8 +88,9 @@ class ReporteCorreo:
             ylabel="Monto USD",
             cid="grafica_monto",
         )
-        if self.res["alertas_comercio"] or self.res["alertas_bin6"]:
-            imagenes["grafica_alertas"] = self._grafica_alertas()
+        # Siempre generar el gráfico de Z-scores (no solo cuando hay alertas)
+        if self.res.get("top_comercio") or self.res.get("top_bin6"):
+            imagenes["grafica_zscore"] = self._grafica_zscore()
         return imagenes
 
     def _grafica_evolutivo(
@@ -108,18 +109,26 @@ class ReporteCorreo:
 
         for herramienta, grupo in df.groupby("herramienta"):
             color = COLORES_HERRAMIENTA.get(herramienta, COLOR_DEFAULT)
+            grupo = grupo.sort_values("dia")
+
+            # Línea diaria real (fina y transparente, referencia de fondo)
             ax.plot(
                 grupo["dia"], grupo[columna],
-                label=herramienta, color=color,
-                linewidth=2, marker="o", markersize=3,
+                color=color, linewidth=1, alpha=0.25,
+                marker="o", markersize=2,
             )
-            # Punto T-1 destacado
+            # Línea suavizada: media móvil 7 días (protagonista)
+            suavizado = grupo[columna].rolling(7, min_periods=1).mean()
+            ax.plot(
+                grupo["dia"], suavizado,
+                label=herramienta, color=color, linewidth=2.5,
+            )
+            # Punto T-1 destacado sobre la línea suavizada
             t1_row = grupo[grupo["dia"] == fecha_t1]
             if not t1_row.empty:
-                ax.scatter(
-                    t1_row["dia"], t1_row[columna],
-                    color=color, s=80, zorder=5,
-                )
+                idx = t1_row.index[0]
+                val_suav = suavizado.loc[idx]
+                ax.scatter(t1_row["dia"], [val_suav], color=color, s=90, zorder=5)
 
         # Línea vertical T-1
         ax.axvline(x=fecha_t1, color="#555555", linestyle="--", linewidth=1, alpha=0.6, label="T-1 (hoy)")
@@ -138,47 +147,58 @@ class ReporteCorreo:
         plt.close(fig)
         return ruta
 
-    def _grafica_alertas(self) -> str:
-        """Gráfica horizontal de Z-score para comercios y BIN6 alertados."""
-        alertas_c = self.res["alertas_comercio"][:10]
-        alertas_b = self.res["alertas_bin6"][:10]
+    def _grafica_zscore(self) -> str:
+        """
+        Gráfica de barras horizontales con Z-score de top comercios y BIN6.
+        Se muestra SIEMPRE (no solo cuando hay alertas) para ver quién
+        está más cerca de alertar aunque todo sea Normal.
+        Barras rojas = cruzan umbral ±2σ. Barras azules/naranjas = dentro del rango.
+        """
+        top_c = self.res.get("top_comercio", [])[:10]
+        top_b = self.res.get("top_bin6", [])[:10]
 
-        etiquetas, zscores, colores = [], [], []
-        for a in alertas_c:
-            etiquetas.append(f"{a.grupo[:30]} ({a.herramienta})")
+        etiquetas, zscores, colores, es_alerta_lista = [], [], [], []
+        for a in top_c:
+            etiquetas.append(f"{a.grupo[:28]} ({a.herramienta})")
             zscores.append(a.zscore_volumen)
-            colores.append(COLORES_HERRAMIENTA.get(a.herramienta, COLOR_DEFAULT))
-        for a in alertas_b:
+            colores.append("#D62728" if a.es_alerta else COLORES_HERRAMIENTA.get(a.herramienta, COLOR_DEFAULT))
+            es_alerta_lista.append(a.es_alerta)
+        for a in top_b:
             etiquetas.append(f"BIN {a.grupo} ({a.herramienta})")
             zscores.append(a.zscore_volumen)
-            colores.append(COLORES_HERRAMIENTA.get(a.herramienta, COLOR_DEFAULT))
+            colores.append("#D62728" if a.es_alerta else COLORES_HERRAMIENTA.get(a.herramienta, COLOR_DEFAULT))
+            es_alerta_lista.append(a.es_alerta)
 
         if not etiquetas:
             return ""
 
-        fig, ax = plt.subplots(figsize=(12, max(4, len(etiquetas) * 0.5)))
+        fig, ax = plt.subplots(figsize=(12, max(5, len(etiquetas) * 0.55)))
         fig.patch.set_facecolor("#F8F9FA")
         ax.set_facecolor("#F8F9FA")
 
-        y_pos = range(len(etiquetas))
-        bars = ax.barh(list(y_pos), zscores, color=colores, alpha=0.85, height=0.6)
-        ax.axvline(x=2,  color="#D62728", linestyle="--", linewidth=1.5, label="Umbral +2σ")
-        ax.axvline(x=-2, color="#D62728", linestyle="--", linewidth=1.5)
-        ax.axvline(x=0,  color="#555555", linewidth=0.8)
+        y_pos = list(range(len(etiquetas)))
+        bars = ax.barh(y_pos, zscores, color=colores, alpha=0.85, height=0.6)
 
-        ax.set_yticks(list(y_pos))
+        ax.axvline(x= 2, color="#D62728", linestyle="--", linewidth=1.5, label="Umbral ±2σ")
+        ax.axvline(x=-2, color="#D62728", linestyle="--", linewidth=1.5)
+        ax.axvline(x= 0, color="#555555", linewidth=0.8)
+        ax.axvspan(-2, 2, alpha=0.05, color="#2CA02C")  # zona verde = normal
+
+        ax.set_yticks(y_pos)
         ax.set_yticklabels(etiquetas, fontsize=9)
-        ax.set_xlabel("Z-score (desviaciones de la media)", fontsize=10)
-        ax.set_title("Grupos con Comportamiento Anómalo — T-1", fontsize=13, fontweight="bold", pad=12)
+        ax.set_xlabel("Z-score (desviaciones de la media de 30 días)", fontsize=10)
+        ax.set_title("Top Comercios y BIN6 — Z-score Volumen T-1", fontsize=13, fontweight="bold", pad=12)
         ax.legend(fontsize=9)
         ax.spines[["top", "right"]].set_visible(False)
 
         for bar, val in zip(bars, zscores):
-            ax.text(val + 0.05, bar.get_y() + bar.get_height() / 2,
-                    f"{val:+.1f}σ", va="center", fontsize=8)
+            offset = 0.08 if val >= 0 else -0.08
+            ha = "left" if val >= 0 else "right"
+            ax.text(val + offset, bar.get_y() + bar.get_height() / 2,
+                    f"{val:+.2f}σ", va="center", ha=ha, fontsize=8, fontweight="bold")
 
         plt.tight_layout()
-        ruta = self._guardar_temp(fig, "grafica_alertas")
+        ruta = self._guardar_temp(fig, "grafica_zscore")
         plt.close(fig)
         return ruta
 
@@ -246,13 +266,21 @@ class ReporteCorreo:
                 <tbody>{filas_alertas_h}</tbody>
             </table>"""
 
+        # Tablas granulares (siempre visibles, no solo cuando hay alertas)
+        tabla_comercio = self._tabla_top_grupos(
+            self.res.get("top_comercio", []), "Top Comercios por Z-score — Volumen T-1"
+        )
+        tabla_bin6 = self._tabla_top_grupos(
+            self.res.get("top_bin6", []), "Top BIN6 por Z-score — Volumen T-1"
+        )
+
         # Imágenes embebidas
-        img_vol   = f'<img src="cid:grafica_volumen" style="width:100%; max-width:700px;">'
-        img_monto = f'<img src="cid:grafica_monto"   style="width:100%; max-width:700px;">'
-        img_alert = f'<img src="cid:grafica_alertas" style="width:100%; max-width:700px;">' if "grafica_alertas" in imagenes else ""
+        img_vol    = '<img src="cid:grafica_volumen" style="width:100%; max-width:700px;">'
+        img_monto  = '<img src="cid:grafica_monto"   style="width:100%; max-width:700px;">'
+        img_zscore = '<img src="cid:grafica_zscore"  style="width:100%; max-width:700px;">' if "grafica_zscore" in imagenes else ""
 
         html = f"""
-        <html><body style="font-family:Calibri, Arial, sans-serif; color:#212529; max-width:750px; margin:auto;">
+        <html><body style="font-family:Calibri, Arial, sans-serif; color:#212529; max-width:780px; margin:auto;">
 
         <div style="background:#1B3A5C; color:white; padding:18px 24px; border-radius:6px 6px 0 0;">
             <h2 style="margin:0; font-size:20px;">Reporte Diario — Consolidado de Declinaciones</h2>
@@ -266,13 +294,14 @@ class ReporteCorreo:
         </div>
 
         <div style="padding:16px 24px;">
+
             <h3 style="color:#1B3A5C;">Resumen del Día T-1</h3>
             <table style="border-collapse:collapse; width:100%; font-size:13px;">
                 <thead style="background:#343A40; color:white;">
                     <tr>
                         <th style="padding:8px 12px; text-align:left;">Herramienta</th>
-                        <th style="padding:8px 12px;">Transacciones</th>
-                        <th style="padding:8px 12px;">Monto Rechazado</th>
+                        <th style="padding:8px 12px; text-align:right;">Transacciones</th>
+                        <th style="padding:8px 12px; text-align:right;">Monto Rechazado</th>
                     </tr>
                 </thead>
                 <tbody>{filas_resumen}</tbody>
@@ -280,13 +309,28 @@ class ReporteCorreo:
 
             {seccion_alertas_h}
 
-            <h3 style="color:#1B3A5C; margin-top:28px;">Evolutivo últimos 30 días — Volumen</h3>
+            <h3 style="color:#1B3A5C; margin-top:28px;">
+                Evolutivo últimos 30 días — Volumen
+                <span style="font-size:11px; font-weight:normal; color:#6C757D;">
+                  (línea suavizada = media 7 días · puntos = dato diario real)
+                </span>
+            </h3>
             {img_vol}
 
             <h3 style="color:#1B3A5C; margin-top:28px;">Evolutivo últimos 30 días — Monto USD</h3>
             {img_monto}
 
-            {"<h3 style='color:#D62728; margin-top:28px;'>Grupos con Comportamiento Anómalo</h3>" + img_alert if img_alert else ""}
+            <h3 style="color:#1B3A5C; margin-top:28px;">
+                Z-score por Comercio y BIN6 — T-1
+                <span style="font-size:11px; font-weight:normal; color:#6C757D;">
+                  (zona verde = comportamiento normal · rojo = alerta)
+                </span>
+            </h3>
+            {img_zscore}
+
+            {tabla_comercio}
+            {tabla_bin6}
+
         </div>
 
         <div style="background:#F1F3F5; padding:10px 24px; border-top:1px solid #DEE2E6;
@@ -298,6 +342,46 @@ class ReporteCorreo:
         </body></html>
         """
         return html
+
+    def _tabla_top_grupos(self, grupos: list, titulo: str) -> str:
+        """Genera tabla HTML con top N grupos por Z-score, siempre visible."""
+        if not grupos:
+            return ""
+
+        filas = ""
+        for a in grupos:
+            bg = "#F8D7DA" if abs(a.zscore_volumen) >= 3 else \
+                 "#FFF3CD" if a.es_alerta else "white"
+            icono = "⚠" if a.es_alerta else "·"
+            filas += f"""
+            <tr style="background:{bg};">
+                <td style="padding:5px 10px;">{icono}</td>
+                <td style="padding:5px 10px;">{a.herramienta}</td>
+                <td style="padding:5px 10px;">{a.grupo[:40]}</td>
+                <td style="padding:5px 10px; text-align:right;">{a.volumen_hoy:,}</td>
+                <td style="padding:5px 10px; text-align:right;">{a.media_volumen:,.0f}</td>
+                <td style="padding:5px 10px; text-align:right; font-weight:bold;">{a.zscore_volumen:+.2f}σ</td>
+                <td style="padding:5px 10px; text-align:right;">USD {a.monto_hoy:,.0f}</td>
+                <td style="padding:5px 10px; text-align:right; font-weight:bold;">{a.zscore_monto:+.2f}σ</td>
+            </tr>"""
+
+        return f"""
+        <h4 style="color:#1B3A5C; margin-top:24px;">{titulo}</h4>
+        <table style="border-collapse:collapse; width:100%; font-size:12px;">
+            <thead style="background:#495057; color:white;">
+                <tr>
+                    <th style="padding:6px 10px;"></th>
+                    <th style="padding:6px 10px; text-align:left;">Herramienta</th>
+                    <th style="padding:6px 10px; text-align:left;">Grupo</th>
+                    <th style="padding:6px 10px; text-align:right;">Vol. Hoy</th>
+                    <th style="padding:6px 10px; text-align:right;">Media 30d</th>
+                    <th style="padding:6px 10px; text-align:right;">Z-score Vol.</th>
+                    <th style="padding:6px 10px; text-align:right;">Monto Hoy</th>
+                    <th style="padding:6px 10px; text-align:right;">Z-score Monto</th>
+                </tr>
+            </thead>
+            <tbody>{filas}</tbody>
+        </table>"""
 
     # ------------------------------------------------------------------
     # Envío por Outlook (win32com)
