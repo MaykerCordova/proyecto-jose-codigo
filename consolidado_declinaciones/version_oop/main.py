@@ -12,6 +12,7 @@ import config
 from consolidador import ConsolidadorHerramientas
 from esquema import EsquemaMaster
 from fuentes import FuenteAccess, FuenteParquet
+from post_procesamiento import PostProcesadorMaster
 
 
 def main() -> None:
@@ -25,11 +26,19 @@ def main() -> None:
         FuenteParquet("RT_CREDITO", config.RUTA_RT_CREDITO, esquema),
     ]
 
+    # Paso 1: consolidar todas las fuentes en un master crudo
     consolidador = ConsolidadorHerramientas(
         fuentes=fuentes,
         ruta_salida=config.RUTA_PARQUET_SALIDA,
     )
     consolidador.ejecutar()
+
+    # Paso 2: aplicar filtros y columnas calculadas → parquet listo para Power BI
+    post = PostProcesadorMaster(
+        ruta_entrada=config.RUTA_PARQUET_SALIDA,
+        ruta_salida=config.RUTA_PARQUET_POWERBI,
+    )
+    post.ejecutar()
 
 
 if __name__ == "__main__":
