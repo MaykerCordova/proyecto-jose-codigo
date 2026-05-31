@@ -28,3 +28,16 @@ DIRECTORIO_SALIDA   = Path(
 )
 RUTA_PARQUET_SALIDA  = DIRECTORIO_SALIDA / "MASTER_CONSOLIDADO.parquet"
 RUTA_PARQUET_POWERBI = DIRECTORIO_SALIDA / "MASTER_POWERBI.parquet"
+
+# ---------------------------------------------------------------------------
+# Configuración de alertas y correo
+# ---------------------------------------------------------------------------
+VENTANA_DIAS_ZSCORE  = 30     # días de historia para calcular media/std
+UMBRAL_ZSCORE        = 2.0    # desviaciones para considerar alerta
+TOP_N_ALERTAS        = 10     # top N comercios y BIN6 en el reporte
+
+DESTINATARIOS_CORREO = [
+    "tucorreo@scotiabank.com",       # reemplaza con tu correo
+    "jefe@scotiabank.com",           # reemplaza con el de tu jefe
+    "compañero@scotiabank.com",      # reemplaza con el de tu compañero
+]

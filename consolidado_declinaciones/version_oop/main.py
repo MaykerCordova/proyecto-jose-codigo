@@ -10,9 +10,11 @@ Ejecución:
 """
 import config
 from consolidador import ConsolidadorHerramientas
+from detector_anomalias import DetectorAnomalias
 from esquema import EsquemaMaster
 from fuentes import FuenteAccess, FuenteParquet
 from post_procesamiento import PostProcesadorMaster
+from reporte_correo import ReporteCorreo
 
 
 def main() -> None:
@@ -33,12 +35,27 @@ def main() -> None:
     )
     consolidador.ejecutar()
 
-    # Paso 2: aplicar filtros y columnas calculadas → parquet listo para Power BI
+    # Paso 2: filtros de negocio + columnas calculadas → parquet para Power BI
     post = PostProcesadorMaster(
         ruta_entrada=config.RUTA_PARQUET_SALIDA,
         ruta_salida=config.RUTA_PARQUET_POWERBI,
     )
     post.ejecutar()
+
+    # Paso 3: detectar anomalías y enviar reporte por correo
+    detector = DetectorAnomalias(
+        ruta_parquet=config.RUTA_PARQUET_POWERBI,
+        ventana_dias=config.VENTANA_DIAS_ZSCORE,
+        umbral_zscore=config.UMBRAL_ZSCORE,
+        top_n=config.TOP_N_ALERTAS,
+    )
+    resultado = detector.analizar()
+
+    reporte = ReporteCorreo(
+        resultado_detector=resultado,
+        destinatarios=config.DESTINATARIOS_CORREO,
+    )
+    reporte.enviar()
 
 
 if __name__ == "__main__":
