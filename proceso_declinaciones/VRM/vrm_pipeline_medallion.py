@@ -191,18 +191,22 @@ def log_ingestion(metadata: dict):
     conn.execute("""
         CREATE TABLE IF NOT EXISTS ingestion_log (
             run_id TEXT, tool_name TEXT, source_file TEXT,
-            rows_read INTEGER, rows_new INTEGER,
-            duration_sec REAL, status TEXT, created_at TEXT
+            rows_read INTEGER, rows_new INTEGER, rows_updated INTEGER,
+            rows_skipped INTEGER, errors INTEGER, duration_sec REAL,
+            status TEXT, created_at TEXT
         )
     """)
     conn.execute(
-        "INSERT INTO ingestion_log VALUES (?,?,?,?,?,?,?,?)",
+        "INSERT INTO ingestion_log VALUES (?,?,?,?,?,?,?,?,?,?,?)",
         (
             metadata.get("run_id", ""),
             metadata.get("tool_name", "vrm"),
             metadata.get("source_file", ""),
             metadata.get("rows_read", 0),
             metadata.get("rows_new", 0),
+            metadata.get("rows_updated", 0),
+            metadata.get("rows_skipped", 0),
+            metadata.get("errors", 0),
             metadata.get("duration_sec", 0.0),
             metadata.get("status", "SUCCESS"),
             datetime.now().isoformat(),

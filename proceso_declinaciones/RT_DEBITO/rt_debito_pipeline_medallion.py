@@ -96,6 +96,25 @@ class Config:
         "ACF-COD RED COMERCIO",
     ]
 
+    # =========================================================================
+    # COLUMN SYNONYMS: nombres alternativos → nombre canónico en GOLD_COLUMNS
+    # =========================================================================
+    # Útil cuando el monitor cambia capitalización o formato de columnas.
+    # El sistema busca cada alternativa y, si la encuentra, renombra al canónico.
+    # Solo se aplica al generar el Gold — el Silver guardado no se toca.
+    # =========================================================================
+    COLUMN_SYNONYMS = {
+        "ACF-ENTRY MODE": [
+            "ACF-Entry Mode",
+            "ACF_Entry_Mode",
+            "ACF-EntryMode",
+            "Entry Mode",
+            "ENTRY MODE",
+        ],
+        # Agregar más casos aquí si aparecen nuevas variaciones:
+        # "ACF-FECHA TRX": ["ACF_FECHA_TRX", "ACF-Fecha TRX"],
+    }
+
 
 # ============================================================================
 # SCHEMA VALIDATOR
@@ -301,12 +320,36 @@ class RTDebitoTransformer:
     MCC_EXCLUIDOS  = {"4829", "6012", "6010"}  # MCCs fuera del scope del reporte
 
     @staticmethod
+    def normalizar_columnas_silver(df: pl.DataFrame) -> pl.DataFrame:
+        """
+        Renombra columnas al nombre canónico usando COLUMN_SYNONYMS.
+        Solo se aplica al generar el Gold — el Silver en disco no se toca.
+        """
+        rename_map = {}
+        columnas_actuales = set(df.columns)
+        for nombre_canonico, alternativas in Config.COLUMN_SYNONYMS.items():
+            if nombre_canonico in columnas_actuales:
+                continue
+            for alt in alternativas:
+                if alt in columnas_actuales:
+                    rename_map[alt] = nombre_canonico
+                    print(f"  Sinónimo aplicado: '{alt}' → '{nombre_canonico}'")
+                    break
+        if rename_map:
+            df = df.rename(rename_map)
+        return df
+
+    @staticmethod
     def generar_gold(df_silver: pl.DataFrame) -> pl.DataFrame:
         """
         Genera el Gold seleccionando solo las columnas configuradas
         y aplicando los filtros de negocio propios de RT Débito.
-        Las columnas que no existen en Silver se ignoran.
+        Antes de seleccionar, normaliza nombres de columnas via COLUMN_SYNONYMS
+        para resolver diferencias de capitalización entre archivos históricos y nuevos.
         """
+        # 1. Normalizar nombres (sinónimos → canónico)
+        df_silver = RTDebitoTransformer.normalizar_columnas_silver(df_silver)
+
         cols_disponibles = [c for c in Config.GOLD_COLUMNS if c in df_silver.columns]
         cols_faltantes = [c for c in Config.GOLD_COLUMNS if c not in df_silver.columns]
 
