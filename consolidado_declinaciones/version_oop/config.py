@@ -10,14 +10,16 @@ DEBUG = False
 
 # ---------------------------------------------------------------------------
 # Rutas de entrada (archivos fuente)
+# Cada herramienta genera su propio Gold en proceso_declinaciones/<herramienta>/
 # ---------------------------------------------------------------------------
-DIRECTORIO_DATOS    = Path(r"C:\Users\s4930359\Data_Herramientas\data\silver")
+DIRECTORIO_GOLD = Path(r"C:\Users\s4930359\Data_Herramientas\data\gold")
+DIRECTORIO_SILVER = Path(r"C:\Users\s4930359\Data_Herramientas\data\silver")
 
-RUTA_VCAS           = DIRECTORIO_DATOS / "VCAS_unitario.parquet"
-RUTA_VRM            = DIRECTORIO_DATOS / "vrm_gold.parquet"
-RUTA_RT_DEBITO      = DIRECTORIO_DATOS / "rt_debito_gold.parquet"
-RUTA_RT_CREDITO     = DIRECTORIO_DATOS / "rt_credito_consolidated.parquet"
-RUTA_BD_FRM         = r"C:\Users\s4930359\Data_Herramientas\BBDD_FRM\BBDD_FRM.accdb"
+RUTA_VCAS       = DIRECTORIO_GOLD   / "vcas_gold.parquet"           # vcas_pipeline_medallion.py
+RUTA_VRM        = DIRECTORIO_GOLD   / "vrm_gold.parquet"            # vrm_pipeline_medallion.py
+RUTA_RT_DEBITO  = DIRECTORIO_GOLD   / "rt_debito_gold.parquet"      # rt_debito_pipeline_medallion.py
+RUTA_RT_CREDITO = DIRECTORIO_GOLD   / "rt_credito_gold.parquet"     # rt_credito_pipeline_medallion.py
+RUTA_BD_FRM     = r"C:\Users\s4930359\Data_Herramientas\BBDD_FRM\BBDD_FRM.accdb"
 
 # ---------------------------------------------------------------------------
 # Ruta de salida
