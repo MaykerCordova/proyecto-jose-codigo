@@ -319,6 +319,14 @@ class RTDebitoTransformer:
     BIN6_EXCLUIDOS = {"427158", "200100"}   # BINs que generan registros duplicados o de prueba
     MCC_EXCLUIDOS  = {"4829", "6012", "6010"}  # MCCs fuera del scope del reporte
 
+    # Valores de ACF-TVR a EXCLUIR del Gold.
+    # Siempre se excluyen: nulos, vacíos, "0", "0.0", "0.00"
+    # Agrega aquí los códigos específicos que no quieres ver:
+    TVR_EXCLUIDOS_ADICIONALES: set = {
+        # "52",
+        # "otro_codigo",
+    }
+
     @staticmethod
     def normalizar_columnas_silver(df: pl.DataFrame) -> pl.DataFrame:
         """
@@ -367,6 +375,16 @@ class RTDebitoTransformer:
         if "ACF-MCC +" in df_gold.columns:
             mcc = pl.col("ACF-MCC +").cast(pl.Utf8).str.replace(r"\.0$", "")
             df_gold = df_gold.filter(~mcc.is_in(RTDebitoTransformer.MCC_EXCLUIDOS))
+
+        # Filtrar ACF-TVR: excluir nulos, vacíos, ceros y códigos en TVR_EXCLUIDOS_ADICIONALES
+        if "ACF-TVR" in df_gold.columns:
+            tvr = pl.col("ACF-TVR").cast(pl.Utf8).str.strip_chars()
+            valores_vacios = {"", "0", "0.0", "0.00"}
+            todos_excluidos = valores_vacios | RTDebitoTransformer.TVR_EXCLUIDOS_ADICIONALES
+            df_gold = df_gold.filter(
+                tvr.is_not_null()
+                & (~tvr.is_in(todos_excluidos))
+            )
 
         print(f"  Gold generado: {df_gold.shape[0]:,} filas x {df_gold.shape[1]} columnas")
         return df_gold
