@@ -21,11 +21,7 @@ import sys
 import time
 from pathlib import Path
 
-# Agregar las carpetas al path para importar los pipelines
-sys.path.insert(0, str(Path(__file__).parent / "VCAS"))
-sys.path.insert(0, str(Path(__file__).parent / "VRM"))
-sys.path.insert(0, str(Path(__file__).parent / "RT_DEBITO"))
-sys.path.insert(0, str(Path(__file__).parent / "RT_CREDITO"))
+# Agregar el consolidado al path (está en otra carpeta del repo)
 sys.path.insert(0, str(Path(__file__).parent.parent / "consolidado_declinaciones" / "version_oop"))
 
 
@@ -69,7 +65,7 @@ def main():
     # ------------------------------------------------------------------
     print("\n[1/5] VCAS — procesando Excels nuevos...")
     try:
-        from vcas_pipeline_medallion import run as vcas_run
+        from VCAS.vcas_pipeline_medallion import run as vcas_run
         vcas_run()
         print("  ✔ VCAS Gold generado")
     except Exception as e:
@@ -82,7 +78,7 @@ def main():
     print("\n[2/5] VRM — carga incremental diaria...")
     if VRM_CSV_FILES:
         try:
-            from vrm_pipeline_medallion import run_daily as vrm_daily
+            from VRM.vrm_pipeline_medallion import run_daily as vrm_daily
             vrm_daily(VRM_CSV_FILES, FECHA_HOY)
             print("  ✔ VRM Gold actualizado")
         except Exception as e:
@@ -97,7 +93,7 @@ def main():
     print("\n[3/5] RT_DEBITO — carga incremental diaria...")
     if RT_DEBITO_EXCEL:
         try:
-            from rt_debito_pipeline_medallion import run_daily as rtd_daily
+            from RT_DEBITO.rt_debito_pipeline_medallion import run_daily as rtd_daily
             rtd_daily(RT_DEBITO_EXCEL, FECHA_HOY)
             print("  ✔ RT_DEBITO Gold actualizado")
         except Exception as e:
@@ -112,7 +108,7 @@ def main():
     print("\n[4/5] RT_CREDITO — carga incremental diaria...")
     if RT_CREDITO_EXCEL:
         try:
-            from rt_credito_pipeline_medallion import run_daily as rtc_daily
+            from RT_CREDITO.rt_credito_pipeline_medallion import run_daily as rtc_daily
             rtc_daily(RT_CREDITO_EXCEL, FECHA_HOY)
             print("  ✔ RT_CREDITO Gold actualizado")
         except Exception as e:
