@@ -80,7 +80,7 @@ class Config:
         "ACF-TARJETA REGISTRO 750",
         "ACF-INDICADOR DE FRAUDE",
         "ACF-BIN",
-        "ACF-Entry Mode",
+        "ACF-ENTRY MODE",
         "ACF-TVR",
         "Condiciones Cumplidas",
         "ACF_Fecha_TRX",
