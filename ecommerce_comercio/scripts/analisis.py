@@ -25,6 +25,8 @@ Hojas:
   18_Perfil_Riesgo      PERFIL_RIESGO × indicador + SCORE_RIESGO
   19_Recomendaciones    Efectividad de cada flag como regla de control
   20_Muestra            500 filas con fraudes y features clave
+  21_Score_Marca        Score Monitor por marca (Visa 0-99, MC 0-999) — solo TC
+  22_Vinculos_Cliente   Reincidencia, primera txn denegada, zscore monto×comercio
 """
 
 import sys
@@ -560,6 +562,40 @@ df_interaccion_monto = (
     if rows_inter else pd.DataFrame()
 )
 
+# ── Hoja 12f: Deciles por BIN caliente ────────────────────────────────────
+print("[12f] Deciles por BIN caliente...")
+df_deciles_bin = {}   # dict: bin_valor → DataFrame con deciles
+if col_bin in df.columns and "DECIL_MONTO" in df.columns and has_ind and n_fraudes > 0:
+    # Top 3 BINs con mayor tasa de fraude (mínimo 30 txn para ser representativos)
+    bin_stats = (
+        df.groupby(col_bin, observed=True).agg(
+            N_total=(col_monto, "count"),
+            N_F=(col_ind, lambda x: (x == "F").sum()),
+        )
+    )
+    bin_stats["TASA_F%"] = (bin_stats["N_F"] / bin_stats["N_total"] * 100).round(2)
+    top_bins_calientes = (
+        bin_stats[bin_stats["N_total"] >= 30]
+        .sort_values("TASA_F%", ascending=False)
+        .head(3).index.tolist()
+    )
+    for bval in top_bins_calientes:
+        df_sub_bin = df[df[col_bin] == bval].copy()
+        if len(df_sub_bin) < 10:
+            continue
+        agg_bin = df_sub_bin.groupby("DECIL_MONTO", observed=True).agg(
+            N_total   = (col_monto, "count"),
+            N_F       = (col_ind,   lambda x: (x == "F").sum()),
+            Monto_min = (col_monto, "min"),
+            Monto_max = (col_monto, "max"),
+            Monto_med = (col_monto, "median"),
+        ).reset_index()
+        agg_bin["TASA_F%"] = (agg_bin["N_F"] / agg_bin["N_total"] * 100).round(2)
+        df_deciles_bin[str(bval)] = agg_bin
+    print(f"  BINs calientes: {top_bins_calientes}")
+else:
+    print("  Sin datos suficientes para deciles por BIN")
+
 # ── Hoja 13: Apertura último decil ────────────────────────────────────────
 print("[13] Apertura último decil...")
 if not df_deciles.empty:
@@ -726,6 +762,11 @@ FLAGS_FIJOS = [
     "ES_MADRUGADA","FLAG_HORARIO_RIESGO","ES_FIN_SEMANA",
     "FLAG_PAIS_INUSUAL","FLAG_REINCIDENTE","FLAG_MULTI_COMERCIO_DIA",
     "ES_CODIGO_CRITICO",
+    # ── Nuevos: score de marca, vínculos de cliente, perfil del comercio ──
+    "FLAG_SCORE_RIESGO_MON_ALTO",
+    "TIENE_FRAUDE_PREVIO_PERIODO","FLAG_PRIMERA_TRX_Y_DENEGADA",
+    "FLAG_TRX_EXCEDE_PATRON_CLI_COM","FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO",
+    "FLAG_HORA_FUERA_PERFIL_COMERCIO",
 ]
 FLAGS_CONFIG = sorted(c for c in df.columns
                       if c.startswith("FLAG_MNT_ACUM_") or
@@ -796,9 +837,199 @@ df_muestra = df_f_all[COLS_MUESTRA].sample(
     min(500, len(df_f_all)), random_state=42
 ).reset_index(drop=True)
 
+# ── Hoja 21: Score por marca ───────────────────────────────────────────────
+print("[21] Score por marca...")
+from config import SCORE_VISA_MAX, SCORE_MC_MAX, UMBRAL_SCORE_MON
+
+_col_scm = C.get("score_riesgo_mon", "")
+_has_scm = (_col_scm and _col_scm in df.columns and
+            "SCORE_MON_NORM" in df.columns and
+            df["SCORE_MON_NORM"].notna().any())
+
+df_score_marca = {}   # dict: "VISA" / "MC" → DataFrame con stats por indicador
+df_score_thresh = pd.DataFrame()   # efectividad del score como regla (threshold scan)
+
+if _has_scm and has_ind:
+    for marca_key, prod_mask_label, s_max in [
+        ("VISA",        "VISA",        SCORE_VISA_MAX),
+        ("MASTERCARD",  "MASTERCARD",  SCORE_MC_MAX),
+    ]:
+        mask_m = (
+            (df["TIPO_PRODUCTO_TEXTO"] == "TC") &
+            (df["MARCA_TARJETA"] == marca_key) &
+            df["SCORE_MON_NORM"].notna()
+        )
+        sub_m = df[mask_m]
+        if len(sub_m) < 5:
+            continue
+        rows_sm = []
+        for ind in ind_pres:
+            s_ind = sub_m.loc[sub_m[col_ind] == ind, "SCORE_MON_NORM"].dropna()
+            if len(s_ind) == 0:
+                continue
+            rows_sm.append({
+                "INDICADOR" : ind,
+                "N"         : len(s_ind),
+                "MEDIA"     : round(s_ind.mean(), 4),
+                "P10"       : round(s_ind.quantile(0.10), 4),
+                "P25"       : round(s_ind.quantile(0.25), 4),
+                "MEDIANA"   : round(s_ind.median(), 4),
+                "P75"       : round(s_ind.quantile(0.75), 4),
+                "P90"       : round(s_ind.quantile(0.90), 4),
+                f"Score_real_max({s_max})": int(round(s_ind.median() * s_max)),
+            })
+        if rows_sm:
+            df_score_marca[marca_key] = pd.DataFrame(rows_sm)
+
+    # Threshold scan: cuánto fraude captura score_norm < X
+    thresholds = [0.10, 0.20, 0.30, 0.40, 0.50]
+    rows_thr = []
+    mask_tc_all = (df["TIPO_PRODUCTO_TEXTO"] == "TC") & df["SCORE_MON_NORM"].notna()
+    n_f_tc  = int((mask_tc_all & mask_f).sum())
+    n_nf_tc = int((mask_tc_all & mask_no_f).sum())
+    for thr in thresholds:
+        mask_thr = mask_tc_all & (df["SCORE_MON_NORM"] < thr)
+        n_imp   = int(mask_thr.sum())
+        n_f_cap = int((mask_thr & mask_f).sum())
+        n_nf_af = int((mask_thr & mask_no_f).sum())
+        pct_f   = round(n_f_cap / n_f_tc  * 100, 2) if n_f_tc  > 0 else 0
+        pct_nf  = round(n_nf_af / n_nf_tc * 100, 2) if n_nf_tc > 0 else 0
+        ratio   = round(pct_f / pct_nf, 2) if pct_nf > 0 else (999.0 if pct_f > 0 else 0.0)
+        rows_thr.append({
+            "Score_norm_umbral" : f"< {thr}",
+            "N_impactado"       : n_imp,
+            "N_fraude_capturado": n_f_cap,
+            "Pct_fraude%"       : pct_f,
+            "Pct_noFraude%"     : pct_nf,
+            "Ratio_F_vs_noFraude": ratio,
+            "Precision%"        : round(n_f_cap / n_imp * 100, 2) if n_imp > 0 else 0,
+        })
+    df_score_thresh = pd.DataFrame(rows_thr) if rows_thr else pd.DataFrame()
+
+print(f"  Score por marca: {list(df_score_marca.keys()) or 'Sin datos'}")
+
+# ── Hoja 22: Vínculos de cliente ──────────────────────────────────────────
+print("[22] Vínculos de cliente...")
+df_vinc_residente  = pd.DataFrame()
+df_vinc_reincid    = pd.DataFrame()
+df_vinc_zscore     = pd.DataFrame()
+df_vinc_efectividad = pd.DataFrame()
+
+if has_ind:
+    # Sub-tabla A: ES_RESIDENTE × indicador
+    if "ES_RESIDENTE" in df.columns:
+        df_vinc_residente = (
+            df.groupby(["ES_RESIDENTE", col_ind], observed=True)
+            .size().unstack(col_ind, fill_value=0)
+        )
+        df_vinc_residente.columns.name = None
+        df_vinc_residente = df_vinc_residente.reindex(
+            columns=[c for c in IND_ORDEN if c in df_vinc_residente.columns]
+        )
+        df_vinc_residente["TOTAL"] = df_vinc_residente.sum(axis=1)
+        if "F" in df_vinc_residente.columns:
+            df_vinc_residente["TASA_F%"] = (
+                df_vinc_residente["F"] / df_vinc_residente["TOTAL"] * 100
+            ).round(2)
+        df_vinc_residente.index = df_vinc_residente.index.map(
+            {0: "NUEVO (1 txn)", 1: "RESIDENTE (≥2 txn)"}
+        )
+        df_vinc_residente = df_vinc_residente.reset_index().rename(
+            columns={"ES_RESIDENTE": "Tipo_Cliente"}
+        )
+
+    # Sub-tabla B: N_FRAUDES_CLIENTE_PERIODO bins × indicador
+    if "N_FRAUDES_CLIENTE_PERIODO" in df.columns:
+        df["_BUCKET_FRAUDES"] = pd.cut(
+            df["N_FRAUDES_CLIENTE_PERIODO"],
+            bins=[-1, 0, 1, 2, 999],
+            labels=["0 fraudes", "1 fraude", "2 fraudes", "3+ fraudes"]
+        )
+        df_vinc_reincid = (
+            df.groupby(["_BUCKET_FRAUDES", col_ind], observed=True)
+            .size().unstack(col_ind, fill_value=0)
+        )
+        df_vinc_reincid.columns.name = None
+        df_vinc_reincid = df_vinc_reincid.reindex(
+            columns=[c for c in IND_ORDEN if c in df_vinc_reincid.columns]
+        )
+        df_vinc_reincid["TOTAL"] = df_vinc_reincid.sum(axis=1)
+        if "F" in df_vinc_reincid.columns:
+            df_vinc_reincid["TASA_F%"] = (
+                df_vinc_reincid["F"] / df_vinc_reincid["TOTAL"] * 100
+            ).round(2)
+        df.drop(columns=["_BUCKET_FRAUDES"], inplace=True)
+        df_vinc_reincid = df_vinc_reincid.reset_index().rename(
+            columns={"_BUCKET_FRAUDES": "Fraudes_en_periodo"}
+        )
+
+    # Sub-tabla C: ZSCORE_MONTO_CLI_COMERCIO binned × indicador
+    if "ZSCORE_MONTO_CLI_COMERCIO" in df.columns:
+        df["_BUCKET_ZCC"] = pd.cut(
+            df["ZSCORE_MONTO_CLI_COMERCIO"],
+            bins=[-np.inf, -2, -1, 1, 2, np.inf],
+            labels=["< -2", "-2 a -1", "-1 a 1 (normal)", "1 a 2", "> 2"]
+        )
+        df_vinc_zscore = (
+            df.groupby(["_BUCKET_ZCC", col_ind], observed=True)
+            .size().unstack(col_ind, fill_value=0)
+        )
+        df_vinc_zscore.columns.name = None
+        df_vinc_zscore = df_vinc_zscore.reindex(
+            columns=[c for c in IND_ORDEN if c in df_vinc_zscore.columns]
+        )
+        df_vinc_zscore["TOTAL"] = df_vinc_zscore.sum(axis=1)
+        if "F" in df_vinc_zscore.columns:
+            df_vinc_zscore["TASA_F%"] = (
+                df_vinc_zscore["F"] / df_vinc_zscore["TOTAL"] * 100
+            ).round(2)
+        df.drop(columns=["_BUCKET_ZCC"], inplace=True)
+        df_vinc_zscore = df_vinc_zscore.reset_index().rename(
+            columns={"_BUCKET_ZCC": "Zscore_monto_cli×comercio"}
+        )
+
+    # Sub-tabla D: efectividad de flags de vínculo (mismo formato hoja 19)
+    FLAGS_VINCULO = [f for f in [
+        "TIENE_FRAUDE_PREVIO_PERIODO",
+        "FLAG_PRIMERA_TRX_Y_DENEGADA",
+        "FLAG_TRX_EXCEDE_PATRON_CLI_COM",
+        "FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO",
+        "FLAG_HORA_FUERA_PERFIL_COMERCIO",
+        "FLAG_SCORE_RIESGO_MON_ALTO",
+    ] if f in df.columns]
+
+    rows_vinc_ef = []
+    for flag in FLAGS_VINCULO:
+        mask_flag = df[flag].fillna(0).astype(bool)
+        n_imp = int(mask_flag.sum())
+        if n_imp == 0:
+            continue
+        n_f_cap  = int((mask_flag & mask_f).sum())
+        n_nof_af = int((mask_flag & mask_no_f).sum())
+        pct_f    = round(n_f_cap  / n_fraudes   * 100, 2) if n_fraudes   > 0 else 0
+        pct_nof  = round(n_nof_af / n_no_fraude * 100, 2) if n_no_fraude > 0 else 0
+        ratio    = round(pct_f / pct_nof, 2) if pct_nof > 0 else (999.0 if pct_f > 0 else 0.0)
+        rows_vinc_ef.append({
+            "FLAG"                  : flag,
+            "N_total_impactado"     : n_imp,
+            "N_fraude_capturado"    : n_f_cap,
+            "Pct_fraude_capturado%" : pct_f,
+            "Pct_noFraude_afectado%": pct_nof,
+            "Precision%"            : round(n_f_cap / n_imp * 100, 2) if n_imp > 0 else 0,
+            "Ratio_F_vs_noFraude"   : ratio,
+        })
+    df_vinc_efectividad = (
+        pd.DataFrame(rows_vinc_ef)
+        .sort_values("Ratio_F_vs_noFraude", ascending=False)
+        if rows_vinc_ef else pd.DataFrame()
+    )
+
+print(f"  Vínculos — residente: {len(df_vinc_residente)} categorías | "
+      f"reincid: {len(df_vinc_reincid)} | zscore: {len(df_vinc_zscore)}")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. EXPORTAR EXCEL (20 hojas)
+# 4. EXPORTAR EXCEL (22 hojas)
 # ─────────────────────────────────────────────────────────────────────────────
 EXCEL_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 hoy  = datetime.today().strftime("%d/%m/%Y %H:%M")
@@ -1101,6 +1332,23 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
             "Ratio > 1.5 = fraude de ticket alto selectivo. "
             "Combinar Categoria + banda de monto para reglas más precisas que solo el BIN."); fa += 2
 
+    # ── F: Deciles por BIN caliente ───────────────────────────────────────
+    if df_deciles_bin:
+        t_titulo(ws, fa, NC,
+            "F. DECILES DE MONTO — TOP 3 BINs CON MAYOR TASA DE FRAUDE",
+            fill=FS); fa += 1
+        t_titulo(ws, fa, NC,
+            "Cada BIN tiene su propio perfil de fraude por decil — "
+            "el patrón puede diferir del comercio global", fill=FS); fa += 1
+        for bval, df_db in df_deciles_bin.items():
+            nc_f = len(df_db.columns)
+            t_titulo(ws, fa, nc_f, f"BIN {bval} — Deciles de monto", fill=FS); fa += 1
+            fa = escribir_df(ws, df_db, fa, reset_idx=True)
+            t_interp(ws, fa, nc_f,
+                f"Deciles de monto solo para transacciones del BIN {bval}. "
+                "Si la TASA_F% por decil difiere del patrón global del comercio, "
+                "usar este BIN + rango de monto como regla específica."); fa += 2
+
     t_autofit(ws)
 
     # ── 13: Apertura Decil 10 ─────────────────────────────────────────────
@@ -1217,8 +1465,8 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
     fa = 1
     t_titulo(ws, fa, 14, "PERFIL DE RIESGO COMPUESTO × INDICADOR"); fa += 1
     t_titulo(ws, fa, 14,
-        "SCORE_RIESGO 0-9 (suma de 9 flags) | "
-        "BAJO=0 | MEDIO=1 | ALTO=2-3 | MUY_ALTO=4+", fill=FS); fa += 1
+        "SCORE_RIESGO 0-11 (suma de 11 flags) | "
+        "BAJO=0 | MEDIO=1-2 | ALTO=3-5 | MUY_ALTO=6+", fill=FS); fa += 1
 
     # ── AVISO: score calibrado solo para TC ──────────────────────────────
     aviso_tc = (
@@ -1333,6 +1581,116 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
     t_autofit(ws)
 
 
+    # ── 21: Score por marca ───────────────────────────────────────────────
+    sn = "21_Score_Marca"
+    ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+    fa = 1
+    t_titulo(ws, fa, 10,
+        f"SCORE DE RIESGO POR MARCA (Monitor) — {COMERCIO_NOMBRE}"); fa += 1
+    t_titulo(ws, fa, 10,
+        "Solo TC (Tarjeta de Crédito) — Visa: 0-99 | Mastercard: 0-999 | "
+        "Score normalizado [0,1] — score_norm BAJO = ALTO RIESGO", fill=FS); fa += 2
+
+    if _has_scm:
+        for marca_key, df_sm in df_score_marca.items():
+            s_max = SCORE_VISA_MAX if marca_key == "VISA" else SCORE_MC_MAX
+            nc_sm = len(df_sm.columns)
+            t_titulo(ws, fa, nc_sm,
+                f"{marca_key} CRÉDITO — Score normalizado (0-{s_max} → [0,1]) por Indicador",
+                fill=FS); fa += 1
+            fa = escribir_df(ws, df_sm, fa, reset_idx=True)
+            t_interp(ws, fa, nc_sm,
+                f"MEDIA baja en F vs N confirma que el score discrimina fraude. "
+                f"Si F_MEDIA < 0.3 y N_MEDIA > 0.5 el score tiene buena separación. "
+                f"Score_real_max({s_max}) = score equivalente en escala original."); fa += 2
+
+        if not df_score_thresh.empty:
+            nc_thr = len(df_score_thresh.columns)
+            t_titulo(ws, fa, nc_thr,
+                "EFECTIVIDAD DEL SCORE COMO REGLA — TC (Visa + MC combinados)",
+                fill=FS); fa += 1
+            fa = escribir_df(ws, df_score_thresh, fa, reset_idx=True)
+            t_interp(ws, fa, nc_thr,
+                f"Umbral < {UMBRAL_SCORE_MON} es el default (configurable en config.py → UMBRAL_SCORE_MON). "
+                "Ratio_F_vs_noFraude > 3 indica que el umbral captura proporcionalmente más fraude que daño colateral. "
+                "Precision% = de cada 100 txn con score bajo, cuántas son fraude real."); fa += 2
+
+        # Sub-tabla: Débito no tiene score
+        fa += 1
+        ws.merge_cells(start_row=fa, start_column=1, end_row=fa, end_column=10)
+        c_td = ws.cell(row=fa, column=1,
+            value="⚠ TARJETA DE DÉBITO: no recibe score de Monitor. "
+                  "Para TD usar SCORE_RIESGO compuesto (hoja 18) + reglas de BIN y monto (hojas 6, 12).")
+        c_td.fill = PatternFill("solid", fgColor="FFF2CC")
+        c_td.font = Font(italic=True, bold=True, size=10, color="1F3864")
+        c_td.alignment = Alignment(horizontal="left", vertical="center", wrap_text=True)
+        c_td.border = BT
+        ws.row_dimensions[fa].height = 40
+    else:
+        ws.cell(row=fa, column=1,
+            value=f"Sin datos de score de Monitor ('{_col_scm}' no encontrado en el parquet). "
+                  "Verificar que la columna SCORE DE RIESGO existe en los Excel de Monitor.")
+
+    t_autofit(ws)
+
+    # ── 22: Vínculos de cliente ───────────────────────────────────────────
+    sn = "22_Vinculos_Cliente"
+    ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+    fa = 1
+    t_titulo(ws, fa, 12,
+        f"VÍNCULOS DE CLIENTE — COMPORTAMIENTO HISTÓRICO — {COMERCIO_NOMBRE}"); fa += 1
+    t_titulo(ws, fa, 12,
+        "Análisis de reincidencia, primera transacción, y desviación del patrón habitual del cliente",
+        fill=FS); fa += 2
+
+    if not df_vinc_residente.empty:
+        nc = len(df_vinc_residente.columns)
+        t_titulo(ws, fa, nc, "A. CLIENTES NUEVOS vs RESIDENTES × INDICADOR", fill=FS); fa += 1
+        fa = escribir_df(ws, df_vinc_residente, fa, reset_idx=True)
+        t_interp(ws, fa, nc,
+            "RESIDENTE = cliente con ≥2 txn en el período analizado (tiene historial). "
+            "NUEVO = primera transacción en el dataset — mayor incertidumbre. "
+            "Si TASA_F% es mayor en NUEVO: los clientes sin historial son más riesgosos. "
+            "Combinar con FLAG_PRIMERA_TRX_Y_DENEGADA para identificar primeras txn fraudulentas."); fa += 2
+
+    if not df_vinc_reincid.empty:
+        nc = len(df_vinc_reincid.columns)
+        t_titulo(ws, fa, nc, "B. REINCIDENCIA DE FRAUDE EN EL PERÍODO × INDICADOR", fill=FS); fa += 1
+        fa = escribir_df(ws, df_vinc_reincid, fa, reset_idx=True)
+        t_interp(ws, fa, nc,
+            "Clientes con 2+ fraudes en el período son reincidentes — señal de cuenta comprometida persistente. "
+            "Si '3+ fraudes' tiene TASA_F% alta: los reincidentes representan un grupo de alto riesgo. "
+            "TIENE_FRAUDE_PREVIO_PERIODO en hoja 19 evalúa este flag como regla de bloqueo."); fa += 2
+
+    if not df_vinc_zscore.empty:
+        nc = len(df_vinc_zscore.columns)
+        t_titulo(ws, fa, nc,
+            "C. DESVIACIÓN DEL MONTO DEL CLIENTE EN ESTE COMERCIO (ZSCORE_MONTO_CLI_COMERCIO)",
+            fill=FS); fa += 1
+        fa = escribir_df(ws, df_vinc_zscore, fa, reset_idx=True)
+        t_interp(ws, fa, nc,
+            "Zscore > 2: el monto es inusualmente ALTO para lo que este cliente gasta en este comercio. "
+            "Zscore < -2: monto inusualmente bajo (posible card testing). "
+            "'-1 a 1 (normal)' es el comportamiento habitual del cliente. "
+            "Si TASA_F% es alta en '> 2': montos altos fuera del patrón del cliente son señal de fraude."); fa += 2
+
+    if not df_vinc_efectividad.empty:
+        nc = len(df_vinc_efectividad.columns)
+        t_titulo(ws, fa, nc,
+            "D. EFECTIVIDAD DE LOS FLAGS DE VÍNCULO COMO REGLAS DE CONTROL",
+            fill=FS); fa += 1
+        fa = escribir_df(ws, df_vinc_efectividad, fa, reset_idx=True)
+        t_interp(ws, fa, nc,
+            "Ratio_F_vs_noFraude > 3 = regla candidata. "
+            "FLAG_PRIMERA_TRX_Y_DENEGADA captura primera txn denegada en un comercio — buena señal de intento fallido. "
+            "FLAG_TRX_EXCEDE_PATRON_CLI_COM: cliente hace más txn de lo habitual → posible compromiso. "
+            "Combinar con BIN o monto para mayor precisión y menor daño colateral.")
+    else:
+        ws.cell(row=fa, column=1, value="Sin flags de vínculo disponibles — ejecutar feature_engineering.py")
+
+    t_autofit(ws)
+
+
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. RESUMEN FINAL
 # ─────────────────────────────────────────────────────────────────────────────
@@ -1345,6 +1703,7 @@ hojas = [
     "12_Deciles_Monto","13_Apertura_Decil10","14_Motivos_Rechazo",
     "15_CVV_Tokenizadas","16_Por_Pais","17_Transac_Diaria",
     "18_Perfil_Riesgo","19_Recomendaciones","20_Muestra",
+    "21_Score_Marca","22_Vinculos_Cliente",
 ]
 for h in hojas:
     print(f"   ✅ {h}")

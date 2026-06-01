@@ -17,12 +17,20 @@ import numpy as np
 import streamlit as st
 import plotly.express as px
 import plotly.graph_objects as go
+import io
+
+try:
+    import polars as pl
+    _HAS_POLARS = True
+except ImportError:
+    _HAS_POLARS = False
 
 warnings.filterwarnings("ignore")
 sys.path.insert(0, str(Path(__file__).resolve().parent / "scripts"))
 
 from config import (
     COLS, PARQUET_FEATURES, COMERCIO_NOMBRE, SOLO_APROBADAS, UMBRALES_REGLA,
+    SCORE_VISA_MAX, SCORE_MC_MAX, UMBRAL_SCORE_MON,
 )
 
 C = COLS
@@ -52,7 +60,13 @@ PALETA = ["#E74C3C","#27AE60","#3498DB","#F39C12","#9B59B6","#95A5A6"]
 def cargar_datos(ruta):
     if not Path(ruta).exists():
         return None
-    df = pd.read_parquet(ruta)
+    if _HAS_POLARS:
+        try:
+            df = pl.read_parquet(ruta).to_pandas()
+        except Exception:
+            df = pd.read_parquet(ruta)
+    else:
+        df = pd.read_parquet(ruta)
     df[C["monto"]]      = pd.to_numeric(df[C["monto"]], errors="coerce")
     df[C["fecha_hora"]] = pd.to_datetime(df[C["fecha_hora"]], errors="coerce")
     return df
@@ -139,6 +153,64 @@ with st.sidebar:
 
     st.divider()
     st.caption(f"Total registros raw: {len(df_raw):,}")
+
+    # ── Descarga del reporte filtrado ─────────────────────────────────────
+    st.divider()
+    st.markdown("**⬇️ Descargar reporte filtrado**")
+    if st.button("Generar Excel (datos actuales)", use_container_width=True):
+        _cols_export = [c for c in [
+            col_ind, col_monto, col_fh, col_cli, col_com,
+            col_prod, col_marca, col_seg, col_eci, col_bin,
+            "SCORE_RIESGO","PERFIL_RIESGO","SCORE_MON_NORM","CATEGORIA_SCORE_MON",
+            "ES_RESIDENTE","N_FRAUDES_CLIENTE_PERIODO","TIENE_FRAUDE_PREVIO_PERIODO",
+            "ZSCORE_MONTO_CLI_COMERCIO","FLAG_PRIMERA_TRX_Y_DENEGADA",
+            "FLAG_TRX_EXCEDE_PATRON_CLI_COM","FLAG_HORA_FUERA_PERFIL_COMERCIO",
+            "TRX_CLIENTE_5MIN","TRX_CLIENTE_24H","GAP_MINUTOS",
+            "FLAG_RAFAGA_5MIN","FLAG_BIN12_REPETIDO_DIA",
+        ] if c in df.columns]
+
+        _kpis = pd.DataFrame([{
+            "Comercio": COMERCIO_NOMBRE,
+            "Total_txn": n_tot,
+            "N_Fraude": n_f,
+            "Tasa_F%": tasa_f,
+            "N_Normal": n_norm,
+            "N_Buena": n_bg,
+            "Monto_Total_S/": round(df[col_monto].sum(), 0),
+            "Ticket_Prom_S/": round(df[col_monto].mean(), 2),
+        }])
+
+        _flags_reporte = [c for c in df.columns if c.startswith("FLAG_") or c == "TIENE_FRAUDE_PREVIO_PERIODO"]
+        _rows_ef = []
+        for _fl in _flags_reporte:
+            _mk = df[_fl].fillna(0).astype(bool)
+            _ni = int(_mk.sum())
+            if _ni == 0: continue
+            _nf = int((_mk & mask_f_df).sum())
+            _nn = int((_mk & mask_nof_df).sum())
+            _pf = round(_nf / n_f * 100, 2) if n_f > 0 else 0
+            _pn = round(_nn / n_nof * 100, 2) if n_nof > 0 else 0
+            _ra = round(_pf / _pn, 2) if _pn > 0 else (999.0 if _pf > 0 else 0.0)
+            _rows_ef.append({"FLAG": _fl, "N_impactado": _ni, "N_F_capturado": _nf,
+                              "Pct_fraude%": _pf, "Pct_noFraude%": _pn, "Ratio": _ra,
+                              "Precision%": round(_nf / _ni * 100, 2) if _ni > 0 else 0})
+        _df_ef = (pd.DataFrame(_rows_ef)
+                  .sort_values("Ratio", ascending=False) if _rows_ef else pd.DataFrame())
+
+        _buf = io.BytesIO()
+        with pd.ExcelWriter(_buf, engine="openpyxl") as _wr:
+            _kpis.to_excel(_wr, sheet_name="KPIs", index=False)
+            df[_cols_export].head(5000).to_excel(_wr, sheet_name="Datos_Filtrados", index=False)
+            if not _df_ef.empty:
+                _df_ef.to_excel(_wr, sheet_name="Efectividad_Flags", index=False)
+        _buf.seek(0)
+        st.download_button(
+            label="📥 Descargar Excel",
+            data=_buf,
+            file_name=f"reporte_filtrado_{COMERCIO_NOMBRE}.xlsx",
+            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+            use_container_width=True,
+        )
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -237,6 +309,7 @@ tabs = st.tabs([
     "⚡ Velocidad",
     "💰 Monto",
     "📅 Comportamiento",
+    "🔗 Vínculos",
     "🏆 Perfil de Riesgo",
     "🔮 Simulador de Reglas",
     "🃏 Card Testing",
@@ -426,6 +499,126 @@ with tabs[1]:
                 st.markdown("**Fraudes (F)**")
                 pivot_f = cruce_ps.pivot(index=col_prod, columns=col_seg, values="F").fillna(0)
                 st.dataframe(pivot_f.style.background_gradient(cmap="Reds"), use_container_width=True)
+
+        st.divider()
+
+        # ── Violín + Jitter: distribución de monto por BIN ───────────────────
+        if has_ind and col_bin in df.columns:
+            st.subheader("Distribución de monto por BIN — Violín + Jitter")
+            st.caption("Fraudes en rojo · Normales en azul (submuestra). Forma del violín = densidad de transacciones.")
+
+            # Top 5 BINs con mayor tasa de fraude (mínimo 10 txn)
+            _bin_tasa = (
+                df.groupby(col_bin, observed=True).agg(
+                    N=(col_monto, "count"),
+                    N_F=(col_ind, lambda x: (x == "F").sum()),
+                ).reset_index()
+            )
+            _bin_tasa["TASA_F%"] = (_bin_tasa["N_F"] / _bin_tasa["N"] * 100).round(2)
+            _top5_bins = (
+                _bin_tasa[_bin_tasa["N"] >= 10]
+                .nlargest(5, "TASA_F%")[col_bin]
+                .astype(str).tolist()
+            )
+
+            if _top5_bins:
+                _df_viol = df[df[col_bin].astype(str).isin(_top5_bins)].copy()
+                _df_viol[col_bin] = _df_viol[col_bin].astype(str)
+
+                # Submuestra de normales para no saturar el gráfico
+                _df_f_viol = _df_viol[_df_viol[col_ind] == "F"]
+                _df_n_viol = _df_viol[_df_viol[col_ind] != "F"]
+                _max_norm  = min(len(_df_n_viol), max(len(_df_f_viol) * 3, 500))
+                if len(_df_n_viol) > _max_norm:
+                    _df_n_viol = _df_n_viol.sample(_max_norm, random_state=42)
+                _df_viol_plot = pd.concat([_df_f_viol, _df_n_viol])
+                _df_viol_plot["_color"] = _df_viol_plot[col_ind].map(
+                    lambda x: "Fraude" if x == "F" else "Normal"
+                )
+
+                _fig_viol = go.Figure()
+                for _bval in _top5_bins:
+                    _sub = _df_viol_plot[_df_viol_plot[col_bin] == _bval]
+                    if len(_sub) == 0:
+                        continue
+                    _fig_viol.add_trace(go.Violin(
+                        x=_sub[_sub["_color"] == "Normal"][col_bin],
+                        y=_sub[_sub["_color"] == "Normal"][col_monto],
+                        name="Normal",
+                        side="negative",
+                        line_color="#3498DB",
+                        fillcolor="rgba(52,152,219,0.3)",
+                        points="all",
+                        jitter=0.05,
+                        pointpos=-1.5,
+                        marker=dict(color="#3498DB", opacity=0.15, size=3),
+                        showlegend=(_bval == _top5_bins[0]),
+                        legendgroup="Normal",
+                        spanmode="soft",
+                    ))
+                    _fig_viol.add_trace(go.Violin(
+                        x=_sub[_sub["_color"] == "Fraude"][col_bin],
+                        y=_sub[_sub["_color"] == "Fraude"][col_monto],
+                        name="Fraude",
+                        side="positive",
+                        line_color="#E74C3C",
+                        fillcolor="rgba(231,76,60,0.4)",
+                        points="all",
+                        jitter=0.05,
+                        pointpos=1.5,
+                        marker=dict(color="#E74C3C", opacity=0.6, size=4),
+                        showlegend=(_bval == _top5_bins[0]),
+                        legendgroup="Fraude",
+                        spanmode="soft",
+                    ))
+
+                _fig_viol.update_layout(
+                    violinmode="overlay",
+                    title=f"Top 5 BINs por tasa de fraude — Distribución de monto",
+                    xaxis_title="BIN",
+                    yaxis_title="Monto (S/)",
+                    height=480,
+                    legend=dict(orientation="h", yanchor="bottom", y=1.02),
+                )
+                st.plotly_chart(_fig_viol, use_container_width=True)
+                st.caption(
+                    f"BINs mostrados (mayor tasa de fraude): {', '.join(_top5_bins)}. "
+                    "Normales subsampleados para claridad visual."
+                )
+            else:
+                st.info("Sin BINs con suficientes datos para el gráfico de violín.")
+
+        st.divider()
+
+        # ── Deciles de monto por BIN específico ──────────────────────────────
+        if col_bin in df.columns and "DECIL_MONTO" in df.columns and has_ind:
+            st.subheader("Deciles de monto filtrados por BIN")
+            _bins_decil = sorted(df[col_bin].dropna().astype(str).unique().tolist())
+            _bin_decil_sel = st.selectbox(
+                "Selecciona un BIN para ver sus deciles",
+                options=["(Todos)"] + _bins_decil,
+                key="bin_decil_sel",
+            )
+            _df_dec_sub = df if _bin_decil_sel == "(Todos)" else df[df[col_bin].astype(str) == _bin_decil_sel]
+            if len(_df_dec_sub) >= 10:
+                _agg_dec = (
+                    _df_dec_sub.groupby("DECIL_MONTO", observed=True)
+                    .agg(
+                        N_total=(col_monto, "count"),
+                        N_F=(col_ind, lambda x: (x == "F").sum()),
+                        Monto_min=(col_monto, "min"),
+                        Monto_max=(col_monto, "max"),
+                        Monto_med=(col_monto, "median"),
+                    ).reset_index()
+                )
+                _agg_dec["TASA_F%"] = (_agg_dec["N_F"] / _agg_dec["N_total"] * 100).round(2)
+                _agg_dec.columns = [str(c) for c in _agg_dec.columns]
+                st.dataframe(
+                    _agg_dec.style.background_gradient(subset=["TASA_F%"], cmap="Reds"),
+                    use_container_width=True,
+                )
+            else:
+                st.info(f"BIN {_bin_decil_sel} tiene menos de 10 transacciones en el filtro actual.")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -674,9 +867,155 @@ with tabs[4]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  TAB 6 — PERFIL DE RIESGO
+#  TAB 6 — VÍNCULOS DE CLIENTE
 # ══════════════════════════════════════════════════════════════════════════════
 with tabs[5]:
+    st.header("Vínculos de Cliente — Comportamiento Histórico")
+    st.caption(
+        "Analiza el historial del cliente en el período: reincidencia de fraude, "
+        "primera transacción, desviación del patrón habitual en este comercio."
+    )
+
+    _vinc_vars = [c for c in [
+        "ES_RESIDENTE","N_FRAUDES_CLIENTE_PERIODO","TIENE_FRAUDE_PREVIO_PERIODO",
+        "ZSCORE_MONTO_CLI_COMERCIO","FLAG_PRIMERA_TRX_Y_DENEGADA",
+        "FLAG_TRX_EXCEDE_PATRON_CLI_COM","FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO",
+        "FLAG_HORA_FUERA_PERFIL_COMERCIO",
+    ] if c in df.columns]
+
+    if not _vinc_vars:
+        st.warning("Variables de vínculo no encontradas. Ejecuta feature_engineering.py.")
+    else:
+        # ── A. Residente vs Nuevo ─────────────────────────────────────────────
+        if "ES_RESIDENTE" in df.columns and has_ind:
+            col_v1, col_v2 = st.columns(2)
+            with col_v1:
+                st.subheader("Nuevo vs Residente")
+                _res_grp = (
+                    df.groupby("ES_RESIDENTE", observed=True)
+                    .agg(N=(col_monto,"count"), N_F=(col_ind, lambda x: (x=="F").sum()))
+                    .reset_index()
+                )
+                _res_grp["Tipo"] = _res_grp["ES_RESIDENTE"].map({0:"NUEVO (1ª txn)",1:"RESIDENTE (≥2 txn)"})
+                _res_grp["TASA_F%"] = (_res_grp["N_F"] / _res_grp["N"] * 100).round(2)
+                fig_res = px.bar(
+                    _res_grp, x="Tipo", y="TASA_F%", color="Tipo",
+                    text="TASA_F%", hover_data=["N","N_F"],
+                    color_discrete_sequence=["#E74C3C","#3498DB"],
+                    title="Tasa de fraude: clientes nuevos vs residentes",
+                )
+                fig_res.update_traces(textposition="outside")
+                fig_res.update_layout(showlegend=False, height=350)
+                st.plotly_chart(fig_res, use_container_width=True)
+
+            with col_v2:
+                st.subheader("Reincidencia de fraude en el período")
+                if "N_FRAUDES_CLIENTE_PERIODO" in df.columns:
+                    _reincid = df.copy()
+                    _reincid["_bucket"] = pd.cut(
+                        _reincid["N_FRAUDES_CLIENTE_PERIODO"],
+                        bins=[-1,0,1,2,999], labels=["0","1","2","3+"]
+                    )
+                    _reincid_grp = (
+                        _reincid.groupby("_bucket", observed=True)
+                        .agg(N=(col_monto,"count"), N_F=(col_ind, lambda x: (x=="F").sum()))
+                        .reset_index()
+                    )
+                    _reincid_grp["TASA_F%"] = (_reincid_grp["N_F"] / _reincid_grp["N"] * 100).round(2)
+                    fig_reincid = px.bar(
+                        _reincid_grp, x="_bucket", y="TASA_F%",
+                        text="TASA_F%", hover_data=["N","N_F"],
+                        color="TASA_F%", color_continuous_scale="Reds",
+                        title="Tasa fraude por N° fraudes del cliente en el período",
+                        labels={"_bucket":"Fraudes previos del cliente"},
+                    )
+                    fig_reincid.update_traces(textposition="outside")
+                    fig_reincid.update_layout(height=350, showlegend=False)
+                    st.plotly_chart(fig_reincid, use_container_width=True)
+
+        st.divider()
+
+        # ── B. ZSCORE monto cliente × comercio ───────────────────────────────
+        if "ZSCORE_MONTO_CLI_COMERCIO" in df.columns and has_ind:
+            st.subheader("Desviación del monto habitual del cliente en este comercio")
+            st.caption("ZSCORE_MONTO_CLI_COMERCIO: cuántas desv. estándar se aleja el monto de la media del cliente en este comercio.")
+            _df_zcc = df[df["ZSCORE_MONTO_CLI_COMERCIO"].notna()].copy()
+            fig_zcc = px.box(
+                _df_zcc[_df_zcc["ZSCORE_MONTO_CLI_COMERCIO"].between(-5, 5)],
+                x=col_ind, y="ZSCORE_MONTO_CLI_COMERCIO",
+                color=col_ind, color_discrete_map=COLORS,
+                category_orders={col_ind: ind_pres},
+                points=False,
+                title="Z-Score monto cliente×comercio por indicador",
+                labels={col_ind:"Indicador","ZSCORE_MONTO_CLI_COMERCIO":"Z-Score"},
+            )
+            fig_zcc.add_hline(y=2,  line_dash="dash", line_color="orange", annotation_text="Z=2 (inusual alto)")
+            fig_zcc.add_hline(y=-2, line_dash="dash", line_color="orange", annotation_text="Z=-2 (inusual bajo)")
+            fig_zcc.update_layout(height=380, showlegend=False)
+            st.plotly_chart(fig_zcc, use_container_width=True)
+
+        st.divider()
+
+        # ── C. Efectividad de flags de vínculo ────────────────────────────────
+        st.subheader("Efectividad de flags de vínculo como reglas")
+        _flags_vinculo = [f for f in [
+            "TIENE_FRAUDE_PREVIO_PERIODO","FLAG_PRIMERA_TRX_Y_DENEGADA",
+            "FLAG_TRX_EXCEDE_PATRON_CLI_COM","FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO",
+            "FLAG_HORA_FUERA_PERFIL_COMERCIO","FLAG_SCORE_RIESGO_MON_ALTO",
+        ] if f in df.columns]
+
+        _rows_vef = []
+        for _fl in _flags_vinculo:
+            _mk = df[_fl].fillna(0).astype(bool)
+            _ni = int(_mk.sum())
+            if _ni == 0: continue
+            _nf = int((_mk & mask_f_df).sum())
+            _nn = int((_mk & mask_nof_df).sum())
+            _pf = round(_nf / n_f * 100, 2) if n_f > 0 else 0
+            _pn = round(_nn / n_nof * 100, 2) if n_nof > 0 else 0
+            _ra = round(_pf / _pn, 2) if _pn > 0 else (999.0 if _pf > 0 else 0.0)
+            _rows_vef.append({
+                "FLAG": _fl, "N_impactado": _ni, "N_Fraude_capturado": _nf,
+                "Pct_fraude%": _pf, "Pct_noFraude%": _pn,
+                "Precision%": round(_nf / _ni * 100, 2) if _ni > 0 else 0,
+                "Ratio": _ra,
+            })
+        if _rows_vef:
+            _df_vef = pd.DataFrame(_rows_vef).sort_values("Ratio", ascending=False)
+            st.dataframe(
+                _df_vef.style.background_gradient(subset=["Ratio","Pct_fraude%"], cmap="Greens"),
+                use_container_width=True,
+            )
+            st.caption("Ratio > 3 con Pct_fraude% > 10% = regla candidata para correo de control.")
+        else:
+            st.info("Sin datos de flags de vínculo.")
+
+        # ── D. Score Monitor por marca ─────────────────────────────────────────
+        if "SCORE_MON_NORM" in df.columns and df["SCORE_MON_NORM"].notna().any() and has_ind:
+            st.divider()
+            st.subheader("Score de Monitor por marca (solo TC)")
+            st.caption(f"Visa 0-{SCORE_VISA_MAX} | Mastercard 0-{SCORE_MC_MAX} | Normalizado a [0,1]. Score bajo = ALTO riesgo.")
+            _df_scm = df[df["SCORE_MON_NORM"].notna()].copy()
+            fig_scm = px.box(
+                _df_scm,
+                x=col_ind, y="SCORE_MON_NORM",
+                color=col_ind, color_discrete_map=COLORS,
+                facet_col=col_marca if col_marca in df.columns else None,
+                category_orders={col_ind: ind_pres},
+                points=False,
+                title="Score Monitor normalizado [0,1] por indicador y marca",
+                labels={col_ind:"Indicador","SCORE_MON_NORM":"Score normalizado"},
+            )
+            fig_scm.add_hline(y=UMBRAL_SCORE_MON, line_dash="dash", line_color="red",
+                              annotation_text=f"Umbral riesgo alto ({UMBRAL_SCORE_MON})")
+            fig_scm.update_layout(height=380, showlegend=False)
+            st.plotly_chart(fig_scm, use_container_width=True)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+#  TAB 7 — PERFIL DE RIESGO
+# ══════════════════════════════════════════════════════════════════════════════
+with tabs[6]:
     st.header("Perfil de Riesgo — Score Compuesto y Flags")
 
     if "SCORE_RIESGO" in df.columns and has_ind:
@@ -761,9 +1100,9 @@ with tabs[5]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  TAB 7 — SIMULADOR DE REGLAS
+#  TAB 8 — SIMULADOR DE REGLAS
 # ══════════════════════════════════════════════════════════════════════════════
-with tabs[6]:
+with tabs[7]:
     st.header("🔮 Simulador de Reglas de Control")
     st.info(
         "Cada regla muestra cuánto **fraude captura** vs cuánto **no-fraude afecta** (N + G + D + P).  \n"
@@ -929,9 +1268,9 @@ with tabs[6]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  TAB 8 — CARD TESTING
+#  TAB 9 — CARD TESTING
 # ══════════════════════════════════════════════════════════════════════════════
-with tabs[7]:
+with tabs[8]:
     st.header("Card Testing — BIN Extendido (BIN12)")
     st.info(
         "**Card testing:** misma raíz BIN12 aparece en múltiples tarjetas distintas el mismo día. "
@@ -989,9 +1328,9 @@ with tabs[7]:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-#  TAB 9 — MUESTRA
+#  TAB 10 — MUESTRA
 # ══════════════════════════════════════════════════════════════════════════════
-with tabs[8]:
+with tabs[9]:
     st.header("Muestra de transacciones")
 
     col_filter1, col_filter2, col_filter3 = st.columns(3)
@@ -999,7 +1338,7 @@ with tabs[8]:
     n_muestra    = col_filter2.slider("Nº de filas", 50, 500, 200, 50)
     score_min    = 0
     if "SCORE_RIESGO" in df.columns:
-        score_min = col_filter3.slider("SCORE_RIESGO mínimo", 0, 9, 0)
+        score_min = col_filter3.slider("SCORE_RIESGO mínimo", 0, 11, 0)
 
     df_m = df[mask_f_df] if solo_fraudes and has_ind else df
     if "SCORE_RIESGO" in df_m.columns:

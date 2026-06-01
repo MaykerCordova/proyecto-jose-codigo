@@ -129,6 +129,17 @@ UMBRALES_REGLA = {
 }
 
 # =============================================================================
+#  SCORE POR MARCA (solo tarjeta de crédito — no aplica a débito)
+#  Monitor entrega un score de riesgo nativo según la marca:
+#    Visa Crédito        → 0 a 99   (mayor score = MENOR riesgo)
+#    Mastercard Crédito  → 0 a 999  (mayor score = MENOR riesgo)
+#  Se normaliza a [0,1]; score_norm < UMBRAL_SCORE_MON indica alto riesgo.
+# =============================================================================
+SCORE_VISA_MAX   = 99     # Visa Crédito: rango máximo del score de Monitor
+SCORE_MC_MAX     = 999    # Mastercard Crédito: rango máximo
+UMBRAL_SCORE_MON = 0.30   # Score normalizado < umbral → FLAG_SCORE_RIESGO_MON_ALTO
+
+# =============================================================================
 #  DICCIONARIO DE RANGOS DE MONTO POR RUBRO
 #  Cortes en S/. Ajusta según el ticket promedio esperado del comercio.
 #  El script también calcula rangos automáticos por árbol de decisión y percentiles.

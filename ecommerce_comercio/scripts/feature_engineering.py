@@ -17,7 +17,10 @@ Bloques:
   I  Card testing (BIN extendido)  → BIN12 repetido mismo día
   J  Rechazos y cascada CVV        → solo si SOLO_APROBADAS = False
   K  Flags de reglas configurables → umbrales definidos en config.py
-  L  Score de riesgo compuesto     → SCORE_RIESGO 0-9, PERFIL_RIESGO
+  L  Score de riesgo compuesto     → SCORE_RIESGO 0-11, PERFIL_RIESGO
+  M  Score diferenciado por marca  → SCORE_MON_NORM, FLAG_SCORE_RIESGO_MON_ALTO (solo TC)
+  N  Vínculos de cliente           → reincidencia de fraude, zscore cliente×comercio
+  O  Perfil horario del comercio   → hora típica, FLAG_HORA_FUERA_PERFIL_COMERCIO
 """
 
 import sys
@@ -37,6 +40,7 @@ from config import (
     ENTRY_MODE_LABEL, ENTRY_MODE_PRESENTE,
     MARCA_LABEL, TIPO_PROD_LABEL, CODIGOS_CRITICOS,
     ORG_NOMBRE, FERIADOS_PERU, FECHAS_ESPECIALES, DIAS_PAGO,
+    SCORE_VISA_MAX, SCORE_MC_MAX, UMBRAL_SCORE_MON,
     clasificar_motivo,
 )
 
@@ -278,6 +282,54 @@ print(f"  Marca: {df['MARCA_TARJETA'].value_counts().to_dict()}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  BLOQUE M — SCORE DIFERENCIADO POR MARCA (solo Tarjeta de Crédito)
+#  Monitor entrega un score nativo:
+#    Visa Crédito       → 0–99    (mayor = menor riesgo)
+#    Mastercard Crédito → 0–999   (mayor = menor riesgo)
+#  Se normaliza a [0,1]. Para débito no llega → SCORE_MON_NORM = NaN.
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n[M] Score diferenciado por marca...")
+
+col_scm = C.get("score_riesgo_mon", "")
+if col_scm and col_scm in df.columns:
+    s = pd.to_numeric(df[col_scm], errors="coerce")
+
+    mask_tc   = (df["TIPO_PRODUCTO_TEXTO"] == "TC")
+    mask_visa = (df["MARCA_TARJETA"] == "VISA")
+    mask_mc   = (df["MARCA_TARJETA"] == "MASTERCARD")
+
+    df["SCORE_MON_NORM"] = np.nan
+    df.loc[mask_tc & mask_visa, "SCORE_MON_NORM"] = (
+        s[mask_tc & mask_visa] / SCORE_VISA_MAX
+    ).round(4)
+    df.loc[mask_tc & mask_mc, "SCORE_MON_NORM"] = (
+        s[mask_tc & mask_mc] / SCORE_MC_MAX
+    ).round(4)
+
+    df["FLAG_SCORE_RIESGO_MON_ALTO"] = (
+        df["SCORE_MON_NORM"].notna() & (df["SCORE_MON_NORM"] < UMBRAL_SCORE_MON)
+    ).astype(int)
+
+    def _cat_score(norm):
+        if pd.isna(norm):  return "SIN_SCORE"
+        elif norm < 0.33:  return "ALTO_RIESGO"
+        elif norm < 0.66:  return "MEDIO"
+        else:              return "BAJO_RIESGO"
+
+    df["CATEGORIA_SCORE_MON"] = df["SCORE_MON_NORM"].map(_cat_score)
+
+    n_con_score = df["SCORE_MON_NORM"].notna().sum()
+    print(f"  Txn con score de marca     : {n_con_score:,}")
+    print(f"  FLAG_SCORE_RIESGO_MON_ALTO : {df['FLAG_SCORE_RIESGO_MON_ALTO'].sum():,}")
+    print(f"  CATEGORIA_SCORE_MON:\n{df['CATEGORIA_SCORE_MON'].value_counts().to_string()}")
+else:
+    df["SCORE_MON_NORM"]             = np.nan
+    df["FLAG_SCORE_RIESGO_MON_ALTO"] = 0
+    df["CATEGORIA_SCORE_MON"]        = "SIN_SCORE"
+    print(f"  '{col_scm or 'score_riesgo_mon'}' no disponible — SCORE_MON_NORM = NaN")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  BLOQUE D — VENTANAS DESLIZANTES POR CLIENTE
 #  Para cada txn: cuántas txn y cuánto monto acumuló ese cliente
 #  en los N segundos ANTERIORES a esa transacción.
@@ -417,6 +469,68 @@ print(f"  Primeras visitas a comercio: {df['ES_CLIENTE_NUEVO_COMERCIO'].sum():,}
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  BLOQUE N — VÍNCULOS DE CLIENTE
+#  Comportamiento histórico del cliente EN EL PERÍODO analizado.
+#  "Vínculo" = señales de que este cliente ya tuvo fraude, o se desvía
+#  de su patrón habitual de consumo en este comercio.
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n[N] Vínculos de cliente...")
+
+# Fraudes totales del cliente en TODO el dataset (no solo últimas 24h)
+fraudes_por_cli = (
+    df.groupby(col_cli)["ES_FRAUDE"].sum()
+    .reset_index()
+    .rename(columns={"ES_FRAUDE": "N_FRAUDES_CLIENTE_PERIODO"})
+)
+df = df.merge(fraudes_por_cli, on=col_cli, how="left")
+df["N_FRAUDES_CLIENTE_PERIODO"]   = df["N_FRAUDES_CLIENTE_PERIODO"].fillna(0).astype(int)
+df["TIENE_FRAUDE_PREVIO_PERIODO"] = (df["N_FRAUDES_CLIENTE_PERIODO"] > 0).astype(int)
+
+# Residente = cliente con historial (≥2 txn en el dataset)
+df["ES_RESIDENTE"] = (df["TOTAL_TRX_CLIENTE"] >= 2).astype(int)
+
+# Z-score del monto del cliente DENTRO de ese comercio específico
+# (distinto de ZSCORE_MONTO_CLIENTE que es global del cliente)
+df["_mean_cli_com"] = df.groupby([col_cli, col_com])[col_monto].transform("mean")
+df["_std_cli_com"]  = (
+    df.groupby([col_cli, col_com])[col_monto].transform("std").fillna(1).replace(0, 1)
+)
+df["ZSCORE_MONTO_CLI_COMERCIO"] = (
+    (df[col_monto] - df["_mean_cli_com"]) / df["_std_cli_com"]
+).round(3)
+df.drop(columns=["_mean_cli_com", "_std_cli_com"], inplace=True)
+
+# Promedio de txn/día del cliente en ese comercio (su patrón habitual)
+_trx_cli_com_dia = (
+    df.groupby([col_cli, col_com, "FECHA_DIA"]).size()
+    .reset_index(name="_n")
+)
+_prom_cli_com = (
+    _trx_cli_com_dia.groupby([col_cli, col_com])["_n"].mean()
+    .reset_index()
+    .rename(columns={"_n": "TRX_DIA_PROM_CLIENTE_COMERCIO"})
+)
+_prom_cli_com["TRX_DIA_PROM_CLIENTE_COMERCIO"] = (
+    _prom_cli_com["TRX_DIA_PROM_CLIENTE_COMERCIO"].round(2)
+)
+df = df.merge(_prom_cli_com, on=[col_cli, col_com], how="left")
+
+df["FLAG_TRX_EXCEDE_PATRON_CLI_COM"] = (
+    df["TRX_CLIENTE_24H"] > (df["TRX_DIA_PROM_CLIENTE_COMERCIO"].fillna(1) * 2)
+).astype(int)
+
+# Primera transacción del cliente en este comercio + fue denegada
+df["FLAG_PRIMERA_TRX_Y_DENEGADA"] = (
+    (df["ES_CLIENTE_NUEVO_COMERCIO"] == 1) & (df["ESTADO"] == "DENEGADA")
+).astype(int)
+
+print(f"  TIENE_FRAUDE_PREVIO_PERIODO   : {df['TIENE_FRAUDE_PREVIO_PERIODO'].sum():,} txn")
+print(f"  ES_RESIDENTE                  : {df['ES_RESIDENTE'].sum():,} txn")
+print(f"  FLAG_PRIMERA_TRX_Y_DENEGADA   : {df['FLAG_PRIMERA_TRX_Y_DENEGADA'].sum():,} txn")
+print(f"  FLAG_TRX_EXCEDE_PATRON_CLI_COM: {df['FLAG_TRX_EXCEDE_PATRON_CLI_COM'].sum():,} txn")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  BLOQUE G — PERFIL DEL COMERCIO Y MCC
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[G] Perfil del comercio y MCC...")
@@ -500,6 +614,53 @@ if col_mcc and col_mcc in df.columns:
 
 print(f"  Top 3 comercios:\n{rank_com.head(3).to_string(index=False)}")
 print(f"  FLAG_PAIS_INUSUAL: {df['FLAG_PAIS_INUSUAL'].sum():,}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  BLOQUE O — PERFIL HORARIO DEL COMERCIO
+#  Identifica si una transacción ocurre fuera de la franja horaria habitual
+#  del comercio (más de 2 desviaciones estándar de la hora promedio).
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n[O] Perfil horario del comercio...")
+
+hora_perfil_com = (
+    df.groupby(col_com)["HORA_DIA"].agg(
+        HORA_PROM_COMERCIO="mean",
+        HORA_STD_COMERCIO="std",
+    ).reset_index()
+)
+hora_perfil_com["HORA_PROM_COMERCIO"] = hora_perfil_com["HORA_PROM_COMERCIO"].round(1)
+hora_perfil_com["HORA_STD_COMERCIO"]  = (
+    hora_perfil_com["HORA_STD_COMERCIO"].fillna(2).round(1).clip(lower=1)
+)
+df = df.merge(hora_perfil_com, on=col_com, how="left")
+
+df["FLAG_HORA_FUERA_PERFIL_COMERCIO"] = (
+    (df["HORA_DIA"] < (df["HORA_PROM_COMERCIO"] - 2 * df["HORA_STD_COMERCIO"])) |
+    (df["HORA_DIA"] > (df["HORA_PROM_COMERCIO"] + 2 * df["HORA_STD_COMERCIO"]))
+).astype(int)
+
+# Promedio de txn por cliente por día en ese comercio (perfil del comercio, no del cliente)
+_trx_cli_dia_com = (
+    df.groupby([col_com, col_cli, "FECHA_DIA"]).size()
+    .reset_index(name="_n2")
+)
+_prom_trx_com = (
+    _trx_cli_dia_com.groupby(col_com)["_n2"].mean()
+    .reset_index()
+    .rename(columns={"_n2": "TRX_PROM_CLIENTE_DIA_COMERCIO"})
+)
+_prom_trx_com["TRX_PROM_CLIENTE_DIA_COMERCIO"] = (
+    _prom_trx_com["TRX_PROM_CLIENTE_DIA_COMERCIO"].round(2)
+)
+df = df.merge(_prom_trx_com, on=col_com, how="left")
+
+df["FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO"] = (
+    df["TRX_CLIENTE_24H"] > (df["TRX_PROM_CLIENTE_DIA_COMERCIO"].fillna(1) * 2)
+).astype(int)
+
+print(f"  FLAG_HORA_FUERA_PERFIL_COMERCIO  : {df['FLAG_HORA_FUERA_PERFIL_COMERCIO'].sum():,} txn")
+print(f"  FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO: {df['FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO'].sum():,} txn")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -697,20 +858,22 @@ for col in [c for c in df.columns if c.startswith("FLAG_MNT_ACUM_") or c.startsw
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
-#  BLOQUE L — SCORE DE RIESGO COMPUESTO (0 a 9)
+#  BLOQUE L — SCORE DE RIESGO COMPUESTO (0 a 11)
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[L] Score de riesgo compuesto...")
 
 componentes = [
-    "FLAG_RAFAGA_5MIN",        # ráfaga de txn en 5 min
-    "FLAG_VEL_ALTA_1H",        # velocidad alta en 1h
-    "HUBO_FRAUDE_PREVIO_24H",  # hubo fraude previo en 24h
-    "HUBO_CVV_FAIL_PREVIO",    # hubo fallo CVV antes (cascada)
-    "FLAG_MONTO_REDONDO",      # monto exacto múltiplo de 50
-    "ES_MADRUGADA",            # entre 0 y 6am
-    "FLAG_REINCIDENTE",        # cliente con múltiples txn en el dataset
-    "FLAG_PAIS_INUSUAL",       # país distinto al habitual del comercio
-    "FLAG_BIN12_REPETIDO_DIA", # mismo BIN12 en múltiples tarjetas ese día
+    "FLAG_RAFAGA_5MIN",                  # ráfaga de txn en 5 min
+    "FLAG_VEL_ALTA_1H",                  # velocidad alta en 1h
+    "HUBO_FRAUDE_PREVIO_24H",            # hubo fraude previo en 24h
+    "HUBO_CVV_FAIL_PREVIO",              # hubo fallo CVV antes (cascada)
+    "FLAG_MONTO_REDONDO",                # monto exacto múltiplo de 50
+    "ES_MADRUGADA",                      # entre 0 y 6am
+    "FLAG_REINCIDENTE",                  # cliente con múltiples txn en el dataset
+    "FLAG_PAIS_INUSUAL",                 # país distinto al habitual del comercio
+    "FLAG_BIN12_REPETIDO_DIA",           # mismo BIN12 en múltiples tarjetas ese día
+    "TIENE_FRAUDE_PREVIO_PERIODO",       # cliente tuvo fraude en el período analizado
+    "FLAG_HORA_FUERA_PERFIL_COMERCIO",   # txn fuera del horario habitual del comercio
 ]
 
 df["SCORE_RIESGO"] = sum(
@@ -718,7 +881,7 @@ df["SCORE_RIESGO"] = sum(
 )
 df["PERFIL_RIESGO"] = pd.cut(
     df["SCORE_RIESGO"],
-    bins=[-1, 0, 1, 3, 99],
+    bins=[-1, 0, 2, 5, 99],
     labels=["BAJO","MEDIO","ALTO","MUY_ALTO"]
 )
 df["FLAG_HORARIO_RIESGO"] = (
@@ -763,6 +926,15 @@ VARS_GENERADAS = [
     "N_RECHAZOS_24H","N_CVV_FAIL_24H","HUBO_CVV_FAIL_PREVIO",
     "HUBO_FRAUDE_PREVIO_24H","PREV_FUE_FRAUDE","MIN_DESDE_ULTIMO_FRAUDE",
     "SCORE_RIESGO","PERFIL_RIESGO","FLAG_HORARIO_RIESGO",
+    # ── M: Score por marca ──────────────────────────────────────────────────
+    "SCORE_MON_NORM","FLAG_SCORE_RIESGO_MON_ALTO","CATEGORIA_SCORE_MON",
+    # ── N: Vínculos de cliente ───────────────────────────────────────────────
+    "N_FRAUDES_CLIENTE_PERIODO","TIENE_FRAUDE_PREVIO_PERIODO","ES_RESIDENTE",
+    "ZSCORE_MONTO_CLI_COMERCIO","TRX_DIA_PROM_CLIENTE_COMERCIO",
+    "FLAG_TRX_EXCEDE_PATRON_CLI_COM","FLAG_PRIMERA_TRX_Y_DENEGADA",
+    # ── O: Perfil horario del comercio ───────────────────────────────────────
+    "HORA_PROM_COMERCIO","HORA_STD_COMERCIO","FLAG_HORA_FUERA_PERFIL_COMERCIO",
+    "TRX_PROM_CLIENTE_DIA_COMERCIO","FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO",
 ]
 
 print("\n" + "─" * 65)

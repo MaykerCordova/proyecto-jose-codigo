@@ -1,0 +1,385 @@
+"""
+clustering_fraude.py — ML No Supervisado para Detección de Anomalías
+──────────────────────────────────────────────────────────────────────
+Detecta patrones de fraude sin etiqueta usando:
+  - Isolation Forest  → ANOMALY_SCORE  (0-1, mayor = más anómalo)
+  - HDBSCAN           → CLUSTER_HDBSCAN (-1 = ruido/outlier)
+
+Lee:  data/consolidado_features.parquet
+Escribe:
+  data/consolidado_features_ml.parquet   (parquet original + nuevas columnas)
+  ml/output/ml_resumen_{COMERCIO}.xlsx   (resumen de clusters)
+
+Ejecutar:
+    python ecommerce_comercio/ml/clustering_fraude.py
+    (desde la raíz del repo, o bien desde la carpeta ecommerce_comercio/)
+"""
+
+import sys
+import warnings
+import os
+import numpy as np
+import pandas as pd
+from pathlib import Path
+
+warnings.filterwarnings("ignore")
+
+# ── Ubicar config ──────────────────────────────────────────────────────────────
+_SCRIPT_DIR   = Path(__file__).resolve().parent           # ml/
+_BASE_DIR     = _SCRIPT_DIR.parent                        # ecommerce_comercio/
+sys.path.insert(0, str(_BASE_DIR / "scripts"))
+
+from config import (
+    COLS, PARQUET_FEATURES, COMERCIO_NOMBRE,
+    SCORE_VISA_MAX, SCORE_MC_MAX,
+)
+
+C = COLS
+
+PARQUET_ML_OUT = _BASE_DIR / "data" / "consolidado_features_ml.parquet"
+EXCEL_ML_OUT   = _SCRIPT_DIR / "output" / f"ml_resumen_{COMERCIO_NOMBRE}.xlsx"
+
+# ── Parámetros (ajustables) ────────────────────────────────────────────────────
+CONTAMINATION_IF  = 0.05   # Isolation Forest: fracción esperada de anomalías
+MIN_CLUSTER_SIZE  = 30     # HDBSCAN: tamaño mínimo de cluster
+MIN_SAMPLES       = 5      # HDBSCAN: densidad mínima para considerar núcleo
+N_ESTIMATORS_IF   = 200    # Isolation Forest: número de árboles
+
+print("═" * 65)
+print(f"ML NO SUPERVISADO — {COMERCIO_NOMBRE}")
+print(f"  Isolation Forest (contamination={CONTAMINATION_IF})")
+print(f"  HDBSCAN (min_cluster_size={MIN_CLUSTER_SIZE})")
+print("═" * 65)
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 1. CARGA
+# ─────────────────────────────────────────────────────────────────────────────
+if not PARQUET_FEATURES.exists():
+    print(f"\n❌  No se encontró: {PARQUET_FEATURES}")
+    print("    Ejecuta primero: python scripts/feature_engineering.py")
+    sys.exit(1)
+
+df = pd.read_parquet(PARQUET_FEATURES)
+print(f"\n  Filas: {len(df):,}  |  Columnas: {df.shape[1]}")
+
+col_ind   = C["indicador"]
+col_monto = C["monto"]
+col_cli   = C["id_cliente"]
+col_bin   = C.get("bin", "")
+has_ind   = col_ind in df.columns
+n_fraudes = int((df[col_ind] == "F").sum()) if has_ind else 0
+
+df[col_monto] = pd.to_numeric(df[col_monto], errors="coerce")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 2. SELECCIÓN DE VARIABLES PARA CLUSTERING
+# ─────────────────────────────────────────────────────────────────────────────
+VARS_CANDIDATAS = [
+    # Velocidad
+    "TRX_CLIENTE_5MIN", "TRX_CLIENTE_10MIN", "TRX_CLIENTE_1H", "TRX_CLIENTE_24H",
+    "GAP_MINUTOS",
+    # Monto
+    "ZSCORE_MONTO_COMERCIO", "ZSCORE_MONTO_CLIENTE", "DECIL_MONTO",
+    "ACELERACION_MONTO", "CONCENTRACION_5MIN_1H",
+    # Nuevas variables de vínculos
+    "ZSCORE_MONTO_CLI_COMERCIO", "N_FRAUDES_CLIENTE_PERIODO",
+    # Flags binarios
+    "FLAG_RAFAGA_5MIN", "FLAG_VEL_ALTA_1H",
+    "FLAG_BIN12_REPETIDO_DIA", "FLAG_MONTO_REDONDO",
+    "FLAG_HORA_FUERA_PERFIL_COMERCIO", "TIENE_FRAUDE_PREVIO_PERIODO",
+    "HUBO_CVV_FAIL_PREVIO", "HUBO_FRAUDE_PREVIO_24H",
+    "FLAG_PRIMERA_TRX_Y_DENEGADA",
+    # Score
+    "SCORE_RIESGO", "SCORE_MON_NORM",
+    # Hora y contexto
+    "HORA_DIA", "ES_FIN_SEMANA", "ES_MADRUGADA",
+]
+
+VARS_ML = [v for v in VARS_CANDIDATAS if v in df.columns]
+print(f"\n  Variables seleccionadas para clustering: {len(VARS_ML)}")
+for v in VARS_ML:
+    print(f"    ✓ {v}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 3. PREPARAR MATRIZ
+# ─────────────────────────────────────────────────────────────────────────────
+X_raw = df[VARS_ML].copy()
+
+# SCORE_MON_NORM es NaN para débito → rellenar con 0.5 (neutro)
+if "SCORE_MON_NORM" in X_raw.columns:
+    X_raw["SCORE_MON_NORM"] = X_raw["SCORE_MON_NORM"].fillna(0.5)
+
+# Rellenar NaN restantes con mediana de cada columna
+for col in X_raw.columns:
+    median_val = X_raw[col].median()
+    X_raw[col] = X_raw[col].fillna(median_val)
+
+# Verificar que no queden NaN
+assert X_raw.isnull().sum().sum() == 0, "Aún hay NaN en la matriz — revisar VARS_ML"
+print(f"\n  Matriz lista: {X_raw.shape[0]:,} × {X_raw.shape[1]}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 4. NORMALIZACIÓN
+# ─────────────────────────────────────────────────────────────────────────────
+try:
+    from sklearn.preprocessing import StandardScaler
+    scaler = StandardScaler()
+    X_scaled = scaler.fit_transform(X_raw)
+    print("  Normalización StandardScaler ✅")
+except ImportError:
+    print("  ⚠ scikit-learn no instalado — usando datos sin normalizar")
+    print("    Instalar: pip install scikit-learn")
+    X_scaled = X_raw.values
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 5. ISOLATION FOREST
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n[IF] Isolation Forest...")
+try:
+    from sklearn.ensemble import IsolationForest
+    iforest = IsolationForest(
+        n_estimators=N_ESTIMATORS_IF,
+        contamination=CONTAMINATION_IF,
+        random_state=42,
+        n_jobs=-1,
+    )
+    iforest.fit(X_scaled)
+
+    # score_samples devuelve scores negativos; invertimos para que mayor = más anómalo
+    raw_scores = iforest.score_samples(X_scaled)
+    anomaly_raw = -raw_scores   # ahora mayor = más anómalo
+
+    # Normalizar a [0,1]
+    s_min, s_max = anomaly_raw.min(), anomaly_raw.max()
+    df["ANOMALY_SCORE"] = ((anomaly_raw - s_min) / (s_max - s_min + 1e-9)).round(4)
+    df["FLAG_ANOMALIA_IF"] = (iforest.predict(X_scaled) == -1).astype(int)
+
+    n_anomalias = int(df["FLAG_ANOMALIA_IF"].sum())
+    pct_anomalias = round(n_anomalias / len(df) * 100, 2)
+    print(f"  Anomalías detectadas: {n_anomalias:,} ({pct_anomalias}%)")
+    if has_ind:
+        coincidencia = int(((df["FLAG_ANOMALIA_IF"] == 1) & (df[col_ind] == "F")).sum())
+        pct_coincid  = round(coincidencia / n_fraudes * 100, 2) if n_fraudes > 0 else 0
+        print(f"  Coincidencia con fraudes etiquetados: {coincidencia:,} ({pct_coincid}%)")
+    HAS_IF = True
+
+except ImportError:
+    print("  ⚠ scikit-learn no instalado. pip install scikit-learn")
+    df["ANOMALY_SCORE"]  = np.nan
+    df["FLAG_ANOMALIA_IF"] = 0
+    HAS_IF = False
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 6. HDBSCAN
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n[HDBSCAN] Clustering...")
+try:
+    import hdbscan
+    clusterer = hdbscan.HDBSCAN(
+        min_cluster_size=MIN_CLUSTER_SIZE,
+        min_samples=MIN_SAMPLES,
+        core_dist_n_jobs=-1,
+    )
+    df["CLUSTER_HDBSCAN"] = clusterer.fit_predict(X_scaled)
+
+    n_clusters   = int(df["CLUSTER_HDBSCAN"].nunique())
+    n_ruido      = int((df["CLUSTER_HDBSCAN"] == -1).sum())
+    print(f"  Clusters encontrados: {n_clusters - 1} (+ ruido)")
+    print(f"  Puntos de ruido (-1): {n_ruido:,} ({round(n_ruido/len(df)*100,2)}%)")
+    HAS_HDBSCAN = True
+
+except ImportError:
+    print("  ⚠ hdbscan no instalado. pip install hdbscan")
+    print("    Alternativa: pip install scikit-learn-extra")
+    df["CLUSTER_HDBSCAN"] = -1
+    HAS_HDBSCAN = False
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. GUARDAR PARQUET
+# ─────────────────────────────────────────────────────────────────────────────
+PARQUET_ML_OUT.parent.mkdir(parents=True, exist_ok=True)
+df.to_parquet(PARQUET_ML_OUT, index=False)
+print(f"\n✅ Parquet guardado: {PARQUET_ML_OUT}")
+print(f"   Columnas nuevas: ANOMALY_SCORE, FLAG_ANOMALIA_IF, CLUSTER_HDBSCAN")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. EXCEL RESUMEN DE CLUSTERS
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n[Excel] Generando resumen de clusters...")
+
+EXCEL_ML_OUT.parent.mkdir(parents=True, exist_ok=True)
+
+try:
+    from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
+    from openpyxl.utils import get_column_letter
+
+    FH = PatternFill("solid", fgColor="1F3864")
+    FS = PatternFill("solid", fgColor="2E75B6")
+    FA = PatternFill("solid", fgColor="DEEAF1")
+    FN_fill = PatternFill()
+    fH = Font(color="FFFFFF", bold=True, size=10)
+    fN_font = Font(size=10)
+    BT = Border(
+        left=Side(style="thin"), right=Side(style="thin"),
+        top=Side(style="thin"),  bottom=Side(style="thin"),
+    )
+    AC = Alignment(horizontal="center", vertical="center", wrap_text=True)
+
+    def _autofit(ws):
+        for col in ws.columns:
+            ml = max((len(str(c.value)) for c in col if c.value is not None), default=10)
+            ws.column_dimensions[get_column_letter(col[0].column)].width = min(ml + 4, 45)
+
+    def _escribir_df(ws, df_t, fila_ini):
+        df_r = df_t.reset_index(drop=True)
+        nc = len(df_r.columns)
+        for j, col in enumerate(df_r.columns, start=1):
+            c = ws.cell(row=fila_ini, column=j, value=str(col))
+            c.fill = FS; c.font = fH; c.alignment = AC; c.border = BT
+        fila_ini += 1
+        for i, (_, row) in enumerate(df_r.iterrows()):
+            fl = FA if i % 2 == 0 else FN_fill
+            for j, val in enumerate(row, start=1):
+                v = round(val, 4) if isinstance(val, float) else val
+                c = ws.cell(row=fila_ini, column=j, value=v)
+                c.fill = fl; c.font = fN_font; c.alignment = AC; c.border = BT
+            fila_ini += 1
+        return fila_ini
+
+    with pd.ExcelWriter(EXCEL_ML_OUT, engine="openpyxl") as writer:
+
+        # ── Hoja 1: Resumen IF ────────────────────────────────────────────
+        sn = "IF_Anomalias"
+        ws = writer.book.create_sheet(sn)
+        writer.sheets[sn] = ws
+        fa = 1
+        ws.merge_cells(start_row=fa, start_column=1, end_row=fa, end_column=10)
+        c = ws.cell(row=fa, column=1, value=f"ISOLATION FOREST — ANOMALÍAS — {COMERCIO_NOMBRE}")
+        c.fill = FH; c.font = fH; c.alignment = AC; c.border = BT; fa += 1
+
+        ws.merge_cells(start_row=fa, start_column=1, end_row=fa, end_column=10)
+        c = ws.cell(row=fa, column=1,
+            value=f"contamination={CONTAMINATION_IF} | n_estimators={N_ESTIMATORS_IF} | "
+                  f"Anomalías: {int(df['FLAG_ANOMALIA_IF'].sum()):,} de {len(df):,}")
+        c.fill = FS; c.font = fH; c.alignment = AC; c.border = BT; fa += 2
+
+        if HAS_IF and has_ind:
+            # Distribución de ANOMALY_SCORE por indicador
+            _ind_ord = ["F","G","B","P","D","N"]
+            _rows_if = []
+            for _ind in [i for i in _ind_ord if i in df[col_ind].unique()]:
+                _s = df.loc[df[col_ind] == _ind, "ANOMALY_SCORE"].dropna()
+                if len(_s) == 0: continue
+                _rows_if.append({
+                    "INDICADOR"    : _ind,
+                    "N"            : len(_s),
+                    "Score_media"  : round(_s.mean(), 4),
+                    "Score_median" : round(_s.median(), 4),
+                    "Score_P90"    : round(_s.quantile(0.90), 4),
+                    "N_anomalias"  : int((df.loc[df[col_ind]==_ind,"FLAG_ANOMALIA_IF"]==1).sum()),
+                    "Pct_anomalias": round((df.loc[df[col_ind]==_ind,"FLAG_ANOMALIA_IF"]==1).mean()*100, 2),
+                })
+            if _rows_if:
+                fa = _escribir_df(ws, pd.DataFrame(_rows_if), fa)
+                fa += 1
+
+        # Top 20 anomalías (ANOMALY_SCORE más alto)
+        _cols_top = [c for c in [
+            col_ind, col_monto, col_bin, col_cli,
+            "ANOMALY_SCORE","SCORE_RIESGO","PERFIL_RIESGO",
+            "TRX_CLIENTE_5MIN","TRX_CLIENTE_24H","MARCA_TARJETA","TIPO_PRODUCTO_TEXTO",
+        ] if c in df.columns]
+        _top_anom = (df.nlargest(20, "ANOMALY_SCORE")[_cols_top]
+                     if "ANOMALY_SCORE" in df.columns else pd.DataFrame())
+        if not _top_anom.empty:
+            ws.merge_cells(start_row=fa, start_column=1, end_row=fa, end_column=len(_cols_top))
+            c = ws.cell(row=fa, column=1, value="TOP 20 TRANSACCIONES CON MAYOR ANOMALY_SCORE")
+            c.fill = FH; c.font = fH; c.alignment = AC; c.border = BT; fa += 1
+            fa = _escribir_df(ws, _top_anom, fa)
+        _autofit(ws)
+
+        # ── Hoja 2: Resumen HDBSCAN ───────────────────────────────────────
+        sn2 = "HDBSCAN_Clusters"
+        ws2 = writer.book.create_sheet(sn2)
+        writer.sheets[sn2] = ws2
+        fa2 = 1
+        ws2.merge_cells(start_row=fa2, start_column=1, end_row=fa2, end_column=10)
+        c2 = ws2.cell(row=fa2, column=1,
+            value=f"HDBSCAN — CLUSTERS — {COMERCIO_NOMBRE}")
+        c2.fill = FH; c2.font = fH; c2.alignment = AC; c2.border = BT; fa2 += 1
+
+        ws2.merge_cells(start_row=fa2, start_column=1, end_row=fa2, end_column=10)
+        n_clusters_real = int((df["CLUSTER_HDBSCAN"] != -1).sum() > 0)
+        c2 = ws2.cell(row=fa2, column=1,
+            value=f"min_cluster_size={MIN_CLUSTER_SIZE} | "
+                  f"Clusters únicos: {df['CLUSTER_HDBSCAN'].nunique()} | "
+                  f"Cluster -1 = ruido/outlier")
+        c2.fill = FS; c2.font = fH; c2.alignment = AC; c2.border = BT; fa2 += 2
+
+        if HAS_HDBSCAN:
+            _rows_cl = []
+            for _cl_id in sorted(df["CLUSTER_HDBSCAN"].unique()):
+                _sub_cl = df[df["CLUSTER_HDBSCAN"] == _cl_id]
+                _row = {
+                    "CLUSTER"        : int(_cl_id),
+                    "Etiqueta"       : "RUIDO/OUTLIER" if _cl_id == -1 else f"Cluster {_cl_id}",
+                    "N_txn"          : len(_sub_cl),
+                    "Pct_total%"     : round(len(_sub_cl) / len(df) * 100, 2),
+                    "Monto_prom"     : round(_sub_cl[col_monto].mean(), 2),
+                    "Monto_median"   : round(_sub_cl[col_monto].median(), 2),
+                }
+                if has_ind:
+                    _row["N_Fraude"]    = int((_sub_cl[col_ind] == "F").sum())
+                    _row["TASA_F%"]     = round(
+                        (_sub_cl[col_ind] == "F").mean() * 100, 2)
+                if "SCORE_RIESGO" in _sub_cl.columns:
+                    _row["Score_prom"] = round(_sub_cl["SCORE_RIESGO"].mean(), 2)
+                if col_bin in _sub_cl.columns:
+                    _top_bin = _sub_cl[col_bin].value_counts().index
+                    _row["Top_BIN"]  = str(_top_bin[0]) if len(_top_bin) > 0 else "-"
+                _rows_cl.append(_row)
+            if _rows_cl:
+                fa2 = _escribir_df(ws2, pd.DataFrame(_rows_cl), fa2)
+        _autofit(ws2)
+
+        # ── Hoja 3: Variables usadas ──────────────────────────────────────
+        sn3 = "Variables_ML"
+        ws3 = writer.book.create_sheet(sn3)
+        writer.sheets[sn3] = ws3
+        fa3 = 1
+        ws3.merge_cells(start_row=fa3, start_column=1, end_row=fa3, end_column=3)
+        c3 = ws3.cell(row=fa3, column=1, value="VARIABLES USADAS EN EL CLUSTERING")
+        c3.fill = FH; c3.font = fH; c3.alignment = AC; c3.border = BT; fa3 += 2
+        for j, hdr in enumerate(["Variable", "Media", "Std"], start=1):
+            c3 = ws3.cell(row=fa3, column=j, value=hdr)
+            c3.fill = FS; c3.font = fH; c3.alignment = AC; c3.border = BT
+        fa3 += 1
+        for i, v in enumerate(VARS_ML):
+            fl = FA if i % 2 == 0 else FN_fill
+            for j, val in enumerate([v,
+                round(float(X_raw[v].mean()), 4),
+                round(float(X_raw[v].std()), 4)], start=1):
+                c3 = ws3.cell(row=fa3, column=j, value=val)
+                c3.fill = fl; c3.font = fN_font; c3.alignment = AC; c3.border = BT
+            fa3 += 1
+        _autofit(ws3)
+
+    print(f"✅ Excel ML guardado: {EXCEL_ML_OUT}")
+
+except ImportError as e:
+    print(f"  ⚠ openpyxl no disponible — Excel no generado ({e})")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# RESUMEN FINAL
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n" + "─" * 65)
+print("COLUMNAS NUEVAS EN EL PARQUET:")
+for col_n in ["ANOMALY_SCORE", "FLAG_ANOMALIA_IF", "CLUSTER_HDBSCAN"]:
+    present = col_n in df.columns
+    print(f"  {'✅' if present else '——'}  {col_n}")
+print(f"\nTotal columnas: {df.shape[1]}")
+print("─" * 65)
+print("\nPara usar en la app Streamlit, actualizar app.py para leer")
+print(f"  data/consolidado_features_ml.parquet  en lugar del parquet estándar.")
+print("O bien ejecutar analisis.py con el nuevo parquet como argumento:")
+print(f"  python scripts/analisis.py data/consolidado_features_ml.parquet")
