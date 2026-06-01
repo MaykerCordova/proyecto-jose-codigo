@@ -41,7 +41,7 @@ class Config:
     # Estructura Medallion
     BRONZE_DIR = BASE_DIR / "data" / "bronze" / "vrm"
     SILVER_DIR = BASE_DIR / "data" / "silver"
-    GOLD_DIR = BASE_DIR / "data" / "gold"
+    GOLD_DIR = Path(__file__).parent.parent / "data_gold"
     METADATA_DIR = BASE_DIR / "data" / "metadata"
 
     # Archivos

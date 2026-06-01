@@ -42,7 +42,7 @@ class Config:
     # Estructura Medallion
     BRONZE_DIR = BASE_DIR          # los Excels viven aquí directamente
     SILVER_DIR = BASE_DIR / "_cache_vcas_parquet"   # caché por Excel
-    GOLD_DIR   = Path(r"C:\Users\s4930359\Data_Herramientas\data\gold")
+    GOLD_DIR   = Path(__file__).parent.parent / "data_gold"
 
     # Archivos de salida
     GOLD_PARQUET = GOLD_DIR / "vcas_gold.parquet"

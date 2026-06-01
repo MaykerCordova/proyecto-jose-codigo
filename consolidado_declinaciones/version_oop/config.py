@@ -10,15 +10,21 @@ DEBUG = False
 
 # ---------------------------------------------------------------------------
 # Rutas de entrada (archivos fuente)
-# Cada herramienta genera su propio Gold en proceso_declinaciones/<herramienta>/
+# Los Golds los genera 10_proceso_declinaciones/run_diario.py
+# y los deposita en 10_proceso_declinaciones/data_gold/
+#
+# AJUSTAR: cambia DIRECTORIO_PROCESO_DECLINACIONES a la ruta real en tu equipo
 # ---------------------------------------------------------------------------
-DIRECTORIO_GOLD = Path(r"C:\Users\s4930359\Data_Herramientas\data\gold")
-DIRECTORIO_SILVER = Path(r"C:\Users\s4930359\Data_Herramientas\data\silver")
+DIRECTORIO_PROCESO_DECLINACIONES = Path(
+    r"C:\Users\s4930359\OneDrive - The Bank of Nova Scotia"
+    r"\10_proceso_declinaciones"   # <-- ajustar si la ruta es diferente
+)
+DIRECTORIO_GOLD = DIRECTORIO_PROCESO_DECLINACIONES / "data_gold"
 
-RUTA_VCAS       = DIRECTORIO_GOLD   / "vcas_gold.parquet"           # vcas_pipeline_medallion.py
-RUTA_VRM        = DIRECTORIO_GOLD   / "vrm_gold.parquet"            # vrm_pipeline_medallion.py
-RUTA_RT_DEBITO  = DIRECTORIO_GOLD   / "rt_debito_gold.parquet"      # rt_debito_pipeline_medallion.py
-RUTA_RT_CREDITO = DIRECTORIO_GOLD   / "rt_credito_gold.parquet"     # rt_credito_pipeline_medallion.py
+RUTA_VCAS       = DIRECTORIO_GOLD / "vcas_gold.parquet"
+RUTA_VRM        = DIRECTORIO_GOLD / "vrm_gold.parquet"
+RUTA_RT_DEBITO  = DIRECTORIO_GOLD / "rt_debito_gold.parquet"
+RUTA_RT_CREDITO = DIRECTORIO_GOLD / "rt_credito_gold.parquet"
 RUTA_BD_FRM     = r"C:\Users\s4930359\Data_Herramientas\BBDD_FRM\BBDD_FRM.accdb"
 
 # ---------------------------------------------------------------------------
