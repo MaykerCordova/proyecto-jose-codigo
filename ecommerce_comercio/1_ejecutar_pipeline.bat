@@ -41,7 +41,7 @@ echo ✅  Paso 1 completado.
 echo.
 
 :: ── PASO 2: FEATURE ENGINEERING ───────────────────────────────────────────────
-echo [PASO 2/3]  FEATURE ENGINEERING — Generando ~70 variables nuevas...
+echo [PASO 2/3]  FEATURE ENGINEERING — Generando ~85 variables nuevas...
 echo ─────────────────────────────────────────────────────────────────────────
 %PYTHON% "%SCRIPTS%\feature_engineering.py"
 if %ERRORLEVEL% neq 0 (
@@ -55,7 +55,7 @@ echo ✅  Paso 2 completado.
 echo.
 
 :: ── PASO 3: ANALISIS ──────────────────────────────────────────────────────────
-echo [PASO 3/3]  ANALISIS — Generando Excel con 20 hojas...
+echo [PASO 3/3]  ANALISIS — Generando Excel con 22 hojas...
 echo ─────────────────────────────────────────────────────────────────────────
 %PYTHON% "%SCRIPTS%\analisis.py"
 if %ERRORLEVEL% neq 0 (
@@ -72,6 +72,7 @@ echo ═════════════════════════
 echo.
 echo   El Excel de análisis está en:  output\
 echo   Para abrir el dashboard:       doble clic en 2_abrir_app.bat
+echo   Para ML (opcional):            doble clic en 3_ejecutar_ml.bat
 echo.
 echo ═══════════════════════════════════════════════════════════════════
 
