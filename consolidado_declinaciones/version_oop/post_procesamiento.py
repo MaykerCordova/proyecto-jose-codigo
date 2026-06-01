@@ -22,26 +22,25 @@ import polars as pl
 
 
 # ---------------------------------------------------------------------------
-# CONSTANTES DE NEGOCIO — editar aquí cuando cambien las reglas
+# CONSTANTES DE NEGOCIO
+#
+# PRINCIPIO DE ARQUITECTURA:
+#   Solo viven aquí los filtros que son decisiones de REPORTE,
+#   no de validez de data. Los filtros de validez de cada fuente
+#   están en el pipeline individual de cada herramienta:
+#     - BIN/MCC excluidos RT_DEBITO → rt_debito_pipeline_medallion.py
+#     - STIP excluidos VRM          → PIPELINE VRM - ARQUITECTURA MEDALLION
+#     - Filtro Rejected VCAS        → vcas_unitario.ipynb
+#     - Filtro de39/condicion FRM   → FuenteAccess._filtrar_declinaciones_validas()
 # ---------------------------------------------------------------------------
 
 # Fecha de corte global: aplica a TODAS las herramientas.
-# Cambia esta fecha para controlar desde qué mes se muestra la data en Power BI.
-# Poner None para mostrar toda la data sin corte global.
+# None = sin corte, muestra toda la data.
 FECHA_CORTE_GLOBAL: date | None = date(2025, 1, 1)
 
-# RT_CREDITO: hubo migración de herramienta en julio 2025.
-# Datos anteriores distorsionan las visualizaciones → cortamos desde julio.
+# RT_CREDITO: decisión de reporte — hubo migración en julio 2025.
+# Datos anteriores distorsionan visualizaciones. SE QUEDA AQUÍ.
 FECHA_CORTE_RT_CREDITO = date(2025, 7, 1)
-
-# RT_DEBITO: estos BINs generan registros duplicados o de prueba.
-BIN6_EXCLUIDOS_RT_DEBITO = {"427158", "200100"}
-
-# RT_DEBITO: estos MCCs no corresponden a comercios del scope del reporte.
-MCC_EXCLUIDOS_RT_DEBITO = {"4829", "6012", "6010"}
-
-# VRM: códigos STIP que no aplican al análisis de declinaciones.
-STIP_EXCLUIDOS_VRM = {"9212", "9224"}
 
 
 # ---------------------------------------------------------------------------
@@ -78,10 +77,8 @@ class PostProcesadorMaster:
         lf = self._corregir_entry_mode(lf)
         lf = self._agregar_llave1(lf)
 
-        # Filtros por herramienta
+        # Filtro de reporte: RT_CREDITO solo desde la fecha de migración
         lf = self._filtrar_rt_credito(lf)
-        lf = self._filtrar_rt_debito(lf)
-        lf = self._filtrar_vrm_stip(lf)
 
         df = lf.collect(streaming=True)
         self.ruta_salida.parent.mkdir(parents=True, exist_ok=True)
@@ -178,29 +175,3 @@ class PostProcesadorMaster:
             )
         )
 
-    def _filtrar_rt_debito(self, lf: pl.LazyFrame) -> pl.LazyFrame:
-        """
-        RT_DEBITO: excluye filas donde BIN6 o MCC estén en las listas de exclusión.
-        Los MCCs también pueden venir con ".0" del Excel → se limpian antes de comparar.
-        """
-        mcc_limpio = pl.col("mcc").cast(pl.Utf8).str.replace(r"\.0$", "")
-        return lf.filter(
-            ~(
-                (pl.col("herramienta") == "RT_DEBITO")
-                & (
-                    pl.col("bin6").is_in(BIN6_EXCLUIDOS_RT_DEBITO)
-                    | mcc_limpio.is_in(MCC_EXCLUIDOS_RT_DEBITO)
-                )
-            )
-        )
-
-    def _filtrar_vrm_stip(self, lf: pl.LazyFrame) -> pl.LazyFrame:
-        """
-        VRM: excluye códigos STIP que no corresponden a declinaciones reales.
-        """
-        return lf.filter(
-            ~(
-                (pl.col("herramienta") == "VRM")
-                & pl.col("STIP").cast(pl.Utf8).is_in(STIP_EXCLUIDOS_VRM)
-            )
-        )
