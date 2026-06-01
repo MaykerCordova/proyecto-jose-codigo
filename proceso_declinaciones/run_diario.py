@@ -1,28 +1,23 @@
 """
-run_diario.py — Script de ejecución diaria del pipeline completo.
+run_diario.py — Actualiza los Golds individuales de cada herramienta.
 
 INSTRUCCIONES DE USO:
 =====================
 1. Edita la sección "ARCHIVOS DEL DÍA" con las rutas de los archivos nuevos.
-2. Corre este script: python run_diario.py
-3. Espera a que termine — al final tienes MASTER_POWERBI.parquet listo y
-   recibes el correo de reporte automáticamente.
+2. Corre: python run_diario.py
+3. Cuando termine, corre el consolidado por separado:
+   python 9_consolidado_declinaciones/version_oop/main.py
 
 ORDEN DE EJECUCIÓN:
 ===================
-1. VCAS        → auto-detecta Excels nuevos, no necesitas ruta
-2. VRM         → necesitas los 2 CSVs del día
-3. RT_DEBITO   → necesitas el Excel del día
-4. RT_CREDITO  → necesitas el Excel del día
-5. Consolidado → une todos los Golds + post-procesamiento + correo
+1. VCAS       → auto-detecta Excels nuevos, no necesitas ruta
+2. VRM        → necesitas los 2 CSVs del día
+3. RT_DEBITO  → necesitas el Excel del día
+4. RT_CREDITO → necesitas el Excel del día
+(FRM se procesa directamente en el consolidado vía Access)
 """
 
-import sys
 import time
-from pathlib import Path
-
-# Agregar el consolidado al path (está en otra carpeta del repo)
-sys.path.insert(0, str(Path(__file__).parent.parent / "consolidado_declinaciones" / "version_oop"))
 
 
 # ============================================================================
@@ -55,7 +50,7 @@ RT_CREDITO_EXCEL = ""
 def main():
     t_inicio = time.time()
     print("=" * 65)
-    print(f"  PIPELINE DIARIO DECLINACIONES — {FECHA_HOY}")
+    print(f"  ACTUALIZANDO GOLDS — {FECHA_HOY}")
     print("=" * 65)
 
     errores = []
@@ -63,7 +58,7 @@ def main():
     # ------------------------------------------------------------------
     # PASO 1: VCAS
     # ------------------------------------------------------------------
-    print("\n[1/5] VCAS — procesando Excels nuevos...")
+    print("\n[1/4] VCAS — procesando Excels nuevos...")
     try:
         from VCAS.vcas_pipeline_medallion import run as vcas_run
         vcas_run()
@@ -75,7 +70,7 @@ def main():
     # ------------------------------------------------------------------
     # PASO 2: VRM
     # ------------------------------------------------------------------
-    print("\n[2/5] VRM — carga incremental diaria...")
+    print("\n[2/4] VRM — carga incremental diaria...")
     if VRM_CSV_FILES:
         try:
             from VRM.vrm_pipeline_medallion import run_daily as vrm_daily
@@ -90,7 +85,7 @@ def main():
     # ------------------------------------------------------------------
     # PASO 3: RT_DEBITO
     # ------------------------------------------------------------------
-    print("\n[3/5] RT_DEBITO — carga incremental diaria...")
+    print("\n[3/4] RT_DEBITO — carga incremental diaria...")
     if RT_DEBITO_EXCEL:
         try:
             from RT_DEBITO.rt_debito_pipeline_medallion import run_daily as rtd_daily
@@ -105,7 +100,7 @@ def main():
     # ------------------------------------------------------------------
     # PASO 4: RT_CREDITO
     # ------------------------------------------------------------------
-    print("\n[4/5] RT_CREDITO — carga incremental diaria...")
+    print("\n[4/4] RT_CREDITO — carga incremental diaria...")
     if RT_CREDITO_EXCEL:
         try:
             from RT_CREDITO.rt_credito_pipeline_medallion import run_daily as rtc_daily
@@ -118,19 +113,7 @@ def main():
         print("  ⚠ RT_CREDITO_EXCEL vacío — saltando RT_CREDITO")
 
     # ------------------------------------------------------------------
-    # PASO 5: Consolidado + Post-procesamiento + Correo
-    # ------------------------------------------------------------------
-    print("\n[5/5] CONSOLIDADO — uniendo todas las herramientas...")
-    try:
-        from main import main as consolidado_main
-        consolidado_main()
-        print("  ✔ Consolidado, Power BI parquet y correo generados")
-    except Exception as e:
-        print(f"  ✘ Consolidado falló: {e}")
-        errores.append(f"Consolidado: {e}")
-
-    # ------------------------------------------------------------------
-    # RESUMEN FINAL
+    # RESUMEN
     # ------------------------------------------------------------------
     duracion = time.time() - t_inicio
     print(f"\n{'=' * 65}")
@@ -139,7 +122,9 @@ def main():
         for err in errores:
             print(f"    ✘ {err}")
     else:
-        print(f"  ✔ PIPELINE COMPLETO en {duracion:.1f}s — todo OK")
+        print(f"  ✔ GOLDS ACTUALIZADOS en {duracion:.1f}s — todo OK")
+    print(f"\n  SIGUIENTE PASO:")
+    print(f"  python 9_consolidado_declinaciones/version_oop/main.py")
     print("=" * 65)
 
 
