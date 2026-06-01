@@ -26,11 +26,11 @@ import time
 
 FECHA_HOY = "2026-05-31"  # <-- cambiar a la fecha del día
 
-# VRM: 2 archivos CSV (listas de VRM del día)
-VRM_CSV_FILES = [
-    # r"C:\FRAUDES\HERRAMIENTAS\VRM\DATA\lista1_20260531.csv",
-    # r"C:\FRAUDES\HERRAMIENTAS\VRM\DATA\lista2_20260531.csv",
-]
+# VRM: 2 archivos CSV separados (lista1 y lista2 del día)
+VRM_LISTA1 = ""
+VRM_LISTA2 = ""
+# VRM_LISTA1 = r"C:\Users\s4930359\Downloads\VRM_W\MemberDefinedReport_lista1.csv"
+# VRM_LISTA2 = r"C:\Users\s4930359\Downloads\VRM_W\MemberDefinedReport_lista2.csv"
 
 # RT_DEBITO: 1 archivo Excel del día
 RT_DEBITO_EXCEL = ""
@@ -71,16 +71,16 @@ def main():
     # PASO 2: VRM
     # ------------------------------------------------------------------
     print("\n[2/4] VRM — carga incremental diaria...")
-    if VRM_CSV_FILES:
+    if VRM_LISTA1 and VRM_LISTA2:
         try:
             from VRM.vrm_pipeline_medallion import run_daily as vrm_daily
-            vrm_daily(VRM_CSV_FILES, FECHA_HOY)
+            vrm_daily(VRM_LISTA1, VRM_LISTA2, FECHA_HOY)
             print("  ✔ VRM Gold actualizado")
         except Exception as e:
             print(f"  ✘ VRM falló: {e}")
             errores.append(f"VRM: {e}")
     else:
-        print("  ⚠ VRM_CSV_FILES vacío — saltando VRM")
+        print("  ⚠ VRM_LISTA1 / VRM_LISTA2 vacíos — saltando VRM")
 
     # ------------------------------------------------------------------
     # PASO 3: RT_DEBITO
