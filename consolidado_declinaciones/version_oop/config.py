@@ -19,7 +19,7 @@ DIRECTORIO_PROCESO_DECLINACIONES = Path(
     r"C:\Users\s4930359\OneDrive - The Bank of Nova Scotia"
     r"\10_proceso_declinaciones"   # <-- ajustar si la ruta es diferente
 )
-DIRECTORIO_GOLD = DIRECTORIO_PROCESO_DECLINACIONES / "data_gold"
+DIRECTORIO_GOLD = DIRECTORIO_PROCESO_DECLINACIONES / "data" / "gold"
 
 RUTA_VCAS       = DIRECTORIO_GOLD / "vcas_gold.parquet"
 RUTA_VRM        = DIRECTORIO_GOLD / "vrm_gold.parquet"

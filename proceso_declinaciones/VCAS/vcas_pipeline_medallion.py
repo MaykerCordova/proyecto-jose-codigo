@@ -40,9 +40,9 @@ class Config:
     BASE_DIR = Path(r"C:\Users\s4930359\OneDrive - The Bank of Nova Scotia\Seguimiento_Consolidado_Herramientas\VCAS_unitario")
 
     # Estructura Medallion
-    BRONZE_DIR = BASE_DIR          # los Excels viven aquí directamente
-    SILVER_DIR = BASE_DIR / "_cache_vcas_parquet"   # caché por Excel
-    GOLD_DIR   = Path(__file__).parent.parent / "data_gold"
+    BRONZE_DIR = BASE_DIR                                        # Excels fuente (OneDrive)
+    SILVER_DIR = BASE_DIR / "_cache_vcas_parquet"               # caché junto a los Excels
+    GOLD_DIR   = Path(__file__).parent.parent / "data" / "gold" # salida en 10_proceso_declinaciones/data/gold/
 
     # Archivos de salida
     GOLD_PARQUET = GOLD_DIR / "vcas_gold.parquet"

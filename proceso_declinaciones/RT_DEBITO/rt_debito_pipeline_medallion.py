@@ -34,14 +34,15 @@ warnings.filterwarnings("ignore")
 class Config:
     """Configuración centralizada del pipeline RT Débito."""
 
-    # === RUTAS BASE ===
+    # === RUTAS FUENTE (absolutas — datos originales) ===
     BASE_DIR = Path(r"C:\Users\s4930359\Data_Herramientas")
 
-    # Estructura Medallion
-    BRONZE_DIR = BASE_DIR / "data" / "bronze" / "rt_debito"
-    SILVER_DIR = BASE_DIR / "data" / "silver"
-    GOLD_DIR = Path(__file__).parent.parent / "data_gold"
-    METADATA_DIR = BASE_DIR / "data" / "metadata"
+    # === RUTAS DE SALIDA (relativas a 10_proceso_declinaciones/) ===
+    DATA_DIR     = Path(__file__).parent.parent / "data"
+    BRONZE_DIR   = DATA_DIR / "bronze" / "rt_debito"
+    SILVER_DIR   = DATA_DIR / "silver"
+    GOLD_DIR     = DATA_DIR / "gold"
+    METADATA_DIR = DATA_DIR / "metadata"
 
     # Archivos
     SILVER_PARQUET = SILVER_DIR / "rt_debito_silver.parquet"

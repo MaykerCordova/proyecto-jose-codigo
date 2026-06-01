@@ -35,23 +35,22 @@ warnings.filterwarnings("ignore")
 class Config:
     """Configuración centralizada del pipeline VRM."""
 
-    # === RUTAS BASE ===
-    BASE_DIR = Path(r"C:\Users\s4930359\Data_Herramientas")
+    # === RUTAS FUENTE (absolutas — datos originales) ===
+    BASE_DIR       = Path(r"C:\Users\s4930359\Data_Herramientas")
+    HISTORICOS_DIR = BASE_DIR / "BBDD_VRM"
 
-    # Estructura Medallion
-    BRONZE_DIR = BASE_DIR / "data" / "bronze" / "vrm"
-    SILVER_DIR = BASE_DIR / "data" / "silver"
-    GOLD_DIR = Path(__file__).parent.parent / "data_gold"
-    METADATA_DIR = BASE_DIR / "data" / "metadata"
+    # === RUTAS DE SALIDA (relativas a 10_proceso_declinaciones/) ===
+    DATA_DIR     = Path(__file__).parent.parent / "data"
+    BRONZE_DIR   = DATA_DIR / "bronze" / "vrm"
+    SILVER_DIR   = DATA_DIR / "silver"
+    GOLD_DIR     = DATA_DIR / "gold"
+    METADATA_DIR = DATA_DIR / "metadata"
 
     # Archivos
     SILVER_PARQUET = SILVER_DIR / "vrm_silver.parquet"
-    GOLD_PARQUET = GOLD_DIR / "vrm_gold.parquet"
-    METADATA_DB = METADATA_DIR / "ingestion_log.db"
-    SCHEMA_FILE = METADATA_DIR / "vrm_schema_registry.json"
-
-    # === CONSOLIDADOS HISTÓRICOS (para bootstrap) ===
-    HISTORICOS_DIR = BASE_DIR / "BBDD_VRM"
+    GOLD_PARQUET   = GOLD_DIR   / "vrm_gold.parquet"
+    METADATA_DB    = METADATA_DIR / "ingestion_log.db"
+    SCHEMA_FILE    = METADATA_DIR / "vrm_schema_registry.json"
     HISTORICOS = [
         "Consolidado.xlsx",
         "vrm_2.xlsx",
