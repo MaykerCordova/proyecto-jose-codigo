@@ -394,6 +394,85 @@ print(f"  Top 5 MCC:\n{rank_mcc.head(5).to_string(index=False)}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  BLOQUE E2 — Antigüedad y novedad del COMERCIO
+#  Detecta comercios que aparecen de la nada (solo 1 mes en la base)
+#  y ya generan alto impacto — patrón típico de comercio fantasma.
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n[E2] Antigüedad y novedad de comercio...")
+
+# Fecha del primer y último fraude por comercio
+fechas_com = (
+    df.groupby(C["comercio_id"])
+    .agg(
+        PRIMER_FECHA_COMERCIO = ("DATETIME_TRX", "min"),
+        ULTIMO_FECHA_COMERCIO = ("DATETIME_TRX", "max"),
+    )
+    .reset_index()
+)
+
+# Meses calendarios distintos en los que aparece el comercio (YYYY-MM)
+meses_com = (
+    df.assign(_MES_CAL=df["DATETIME_TRX"].dt.to_period("M").astype(str))
+    .groupby(C["comercio_id"])["_MES_CAL"]
+    .nunique()
+    .reset_index()
+    .rename(columns={"_MES_CAL": "MESES_DISTINTOS_COMERCIO"})
+)
+
+novedad_com = fechas_com.merge(meses_com, on=C["comercio_id"], how="left")
+
+# Antigüedad en días dentro del dataset (último - primer fraude)
+novedad_com["ANTIGÜEDAD_COMERCIO_DIAS"] = (
+    novedad_com["ULTIMO_FECHA_COMERCIO"] - novedad_com["PRIMER_FECHA_COMERCIO"]
+).dt.days
+
+# Umbral top 20% por monto para FLAG_COMERCIO_ALTO_IMPACTO_RAPIDO
+umbral_monto_top20 = totales_com["MONTO_TOTAL_FRAUDE_COM"].quantile(0.80)
+
+novedad_com = novedad_com.merge(
+    totales_com[[C["comercio_id"], "MONTO_TOTAL_FRAUDE_COM"]],
+    on=C["comercio_id"], how="left"
+)
+
+novedad_com["FLAG_COMERCIO_NUEVO"] = (
+    novedad_com["MESES_DISTINTOS_COMERCIO"] == 1
+).astype(int)
+
+novedad_com["FLAG_COMERCIO_ALTO_IMPACTO_RAPIDO"] = (
+    (novedad_com["FLAG_COMERCIO_NUEVO"] == 1) &
+    (novedad_com["MONTO_TOTAL_FRAUDE_COM"] >= umbral_monto_top20)
+).astype(int)
+
+df = df.merge(
+    novedad_com[[
+        C["comercio_id"],
+        "PRIMER_FECHA_COMERCIO", "ULTIMO_FECHA_COMERCIO",
+        "MESES_DISTINTOS_COMERCIO", "ANTIGÜEDAD_COMERCIO_DIAS",
+        "FLAG_COMERCIO_NUEVO", "FLAG_COMERCIO_ALTO_IMPACTO_RAPIDO",
+    ]],
+    on=C["comercio_id"], how="left"
+)
+
+nuevos = df[df["FLAG_COMERCIO_NUEVO"] == 1][C["comercio_id"]].nunique()
+alto_impacto = df[df["FLAG_COMERCIO_ALTO_IMPACTO_RAPIDO"] == 1][C["comercio_id"]].nunique()
+print(f"  Comercios nuevos (1 mes en base)         : {nuevos:,}")
+print(f"  Comercios nuevos + alto impacto (top 20%): {alto_impacto:,}")
+print(f"  Umbral monto top 20%                     : {umbral_monto_top20:,.2f}")
+if alto_impacto > 0:
+    cols_show = [C["comercio_id"], "MESES_DISTINTOS_COMERCIO",
+                 "ANTIGÜEDAD_COMERCIO_DIAS", "MONTO_TOTAL_FRAUDE_COM"]
+    top_nuevos = (
+        df[df["FLAG_COMERCIO_ALTO_IMPACTO_RAPIDO"] == 1]
+        [[*cols_show]]
+        .drop_duplicates()
+        .sort_values("MONTO_TOTAL_FRAUDE_COM", ascending=False)
+        .head(5)
+    )
+    print(f"  Top comercios fantasma:\n{top_nuevos.to_string(index=False)}")
+print("  Antigüedad comercio OK ✅")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  BLOQUE F — Señales de MONTO
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[F] Señales de monto...")
@@ -488,6 +567,10 @@ VARS_NUEVAS = [
     "FRAUDES_COM_DIA", "RANKING_COMERCIO",
     "TOTAL_FRAUDES_MCC", "MONTO_TOTAL_MCC", "COMERCIOS_EN_MCC",
     "TARJETAS_EN_MCC", "RANKING_MCC",
+    # E2 — antigüedad y novedad del comercio
+    "PRIMER_FECHA_COMERCIO", "ULTIMO_FECHA_COMERCIO",
+    "MESES_DISTINTOS_COMERCIO", "ANTIGÜEDAD_COMERCIO_DIAS",
+    "FLAG_COMERCIO_NUEVO", "FLAG_COMERCIO_ALTO_IMPACTO_RAPIDO",
     # F — monto
     "FLAG_MONTO_REDONDO", "DESVIO_MONTO_VS_COM", "RATIO_MONTO_VS_COM",
     "RANGO_MONTO", "TIPO_CAMBIO_IMPLICITO",
