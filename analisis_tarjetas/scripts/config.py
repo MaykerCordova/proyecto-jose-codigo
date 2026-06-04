@@ -140,7 +140,7 @@ RANGOS_MONTO_RUBRO = {
 ORG_NOMBRE = {}
 
 SEG_NOMBRE = {
-    "30": "Polo Direccion",     "99": "Polo Direccion",
+    "30": "Beyond",             "99": "Beyond",
     "31": "Premium",            "32": "Preferente",
     "33": "Personal",           "34": "Estandar",
     "5":  "Inst. Financieras",  "21": "Corporativo",
@@ -151,7 +151,7 @@ SEG_NOMBRE = {
     "13": "Microempresas",
 }
 SEG_GRUPO = {
-    "30": "Affluent",           "99": "Affluent",
+    "30": "Beyond",             "99": "Beyond",
     "31": "Emerging Affluent",  "32": "Emerging Affluent",
     "33": "Top of Mass",        "34": "Mass",
     "5":  "Corporate",          "21": "Corporate",

@@ -216,6 +216,13 @@ FEATURES = [f for f in [
     # Flags de velocidad
     "FLAG_RAFAGA_5MIN",
     "FLAG_VEL_ALTA_1H",
+    # Tipo de transacción
+    "ES_TOKENIZADA",        # billetera digital (Google/Apple Pay)
+    "ES_TARJETA_PRESENTE",  # transacción presencial (chip/NFC/banda)
+    "ES_MOTO",              # mail/telephone order
+    "ES_SEGURO",            # autenticada con 3DS (ECI 5 o 2)
+    "FLAG_COD_TRX_10",      # código transacción 10
+    "FLAG_COD_TRX_92",      # código transacción 92 (reversión/especial)
     # Perfil cliente vs comercio
     "RATIO_TRX_DIA_VS_HIST",
     "FLAG_MONTO_ALTO_CLI_COMERCIO",

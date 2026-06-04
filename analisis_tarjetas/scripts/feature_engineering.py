@@ -276,6 +276,26 @@ if col_moto and col_moto in df.columns:
 else:
     df["ES_MOTO"] = 0
 
+# ES_SEGURO: transacción autenticada con 3DS (ECI 5=Visa seguro, 2=MC seguro)
+if col_eci and col_eci in df.columns:
+    _eci = df[col_eci].astype(str).str.strip().str.lstrip("0")
+    df["ES_SEGURO"] = _eci.isin({"2", "5"}).astype(int)
+else:
+    df["ES_SEGURO"] = 0
+
+# FLAG_COD_TRX: flags por código de transacción
+# 00=compra estándar (mayoría), 10=telefónica/MOTO, 92=reversión/especial
+col_cod_trx = C.get("cod_trx", "")
+if col_cod_trx and col_cod_trx in df.columns:
+    _ct = df[col_cod_trx].astype(str).str.strip().str.zfill(2)
+    df["FLAG_COD_TRX_10"] = (_ct == "10").astype(int)
+    df["FLAG_COD_TRX_92"] = (_ct == "92").astype(int)
+    print(f"  FLAG_COD_TRX_10 : {df['FLAG_COD_TRX_10'].sum():,}")
+    print(f"  FLAG_COD_TRX_92 : {df['FLAG_COD_TRX_92'].sum():,}")
+else:
+    df["FLAG_COD_TRX_10"] = 0
+    df["FLAG_COD_TRX_92"] = 0
+
 if col_seg and col_seg in df.columns:
     seg_s = df[col_seg].astype(str).str.strip().str.split(".").str[0]
     df["SEG_NOMBRE"] = seg_s.map(SEG_NOMBRE).fillna("Otro/Sin seg")
