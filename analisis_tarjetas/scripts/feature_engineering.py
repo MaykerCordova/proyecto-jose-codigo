@@ -77,7 +77,7 @@ if faltantes:
     for k, v in faltantes.items():
         print(f"   COLS['{k}'] = '{v}'  ← no existe")
 
-for col_key in ["monto", "monto_dolar", "saldo"]:
+for col_key in ["monto", "monto_dolar", "monto_original", "saldo"]:
     col_val = C.get(col_key, "")
     if col_val and col_val in df.columns:
         df[col_val] = (
@@ -113,6 +113,46 @@ print(f"  Clientes únicos  : {df[col_cli].nunique():,}")
 if "TARJETA" in df.columns:
     print(f"  Tarjetas únicas  : {df['TARJETA'].nunique():,}")
 print(f"  Monto total (S/) : {df[col_monto].sum():,.2f}")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
+#  BLOQUE A2 — MONEDA DE LA TRANSACCIÓN (USD vs PEN)
+#  Lógica: si monto_original ≈ monto_dolar  → transacción en USD
+#          si monto_original ≈ monto_local   → transacción en PEN
+#  Tolerancia de 0.01 para comparación de flotantes
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n[A2] Moneda de la transacción (USD vs PEN)...")
+
+col_monto_orig = C.get("monto_original", "")
+col_monto_usd  = C.get("monto_dolar", "")
+col_monto_loc  = C["monto"]
+
+if col_monto_orig and col_monto_orig in df.columns:
+    df[col_monto_orig] = pd.to_numeric(df[col_monto_orig], errors="coerce")
+    df[col_monto_usd]  = pd.to_numeric(df[col_monto_usd],  errors="coerce")
+
+    # FLAG_TRX_EN_USD: monto_original coincide con monto_dolar
+    df["FLAG_TRX_EN_USD"] = (
+        (df[col_monto_orig] - df[col_monto_usd]).abs() <= 0.01
+    ).astype(int)
+
+    # FLAG_TRX_EN_PEN: monto_original coincide con monto_local
+    df["FLAG_TRX_EN_PEN"] = (
+        (df[col_monto_orig] - df[col_monto_loc]).abs() <= 0.01
+    ).astype(int)
+
+    n_usd = int(df["FLAG_TRX_EN_USD"].sum())
+    n_pen = int(df["FLAG_TRX_EN_PEN"].sum())
+    n_amb = int(((df["FLAG_TRX_EN_USD"] == 0) & (df["FLAG_TRX_EN_PEN"] == 0)).sum())
+    print(f"  Transacciones en USD : {n_usd:,}  ({n_usd/len(df)*100:.1f}%)")
+    print(f"  Transacciones en PEN : {n_pen:,}  ({n_pen/len(df)*100:.1f}%)")
+    print(f"  Moneda no identificada: {n_amb:,}  ({n_amb/len(df)*100:.1f}%)")
+else:
+    df["FLAG_TRX_EN_USD"] = 0
+    df["FLAG_TRX_EN_PEN"] = 0
+    print(f"  ⚠️  '{col_monto_orig}' no encontrada — FLAG_TRX_EN_USD/PEN = 0")
+
+print("  Bloque A2 OK ✅")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════

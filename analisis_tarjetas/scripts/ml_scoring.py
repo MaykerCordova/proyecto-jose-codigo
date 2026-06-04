@@ -187,10 +187,11 @@ print(f"  No fraude (0)          : {n_nf:,}  ({100-tasa:.2f}%)")
 #   FLAG_PAIS_DISTINTO_CLIENTE  → IV=0.0041, sin poder predictivo
 
 FEATURES = [f for f in [
-    # Monto
+    # Monto y moneda
     col_mto,
     "FLAG_MONTO_REDONDO",
     "FLAG_MONTO_BAJO",
+    "FLAG_TRX_EN_USD",   # transacción en dólares vs soles
     # Velocidad tarjeta (se prefiere tarjeta sobre cliente — misma info, menos redundancia)
     "TRX_TARJETA_5MIN",
     "TRX_TARJETA_24H",

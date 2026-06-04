@@ -62,6 +62,9 @@ COLS = {
     # ── MONTOS ────────────────────────────────────────────────────────────────
     "monto"            : "ACF-MONTO EN MONEDA LOCAL",
     "monto_dolar"      : "ACF-MONTO DOLLAR",
+    "monto_original"   : "ACF-MONTO ORIGINAL DE LA TRANSACCION",
+    # monto_original == monto_dolar  → transacción en USD
+    # monto_original == monto_local  → transacción en PEN (soles)
 
     # ── TARJETA / CLIENTE ─────────────────────────────────────────────────────
     "tipo_producto"    : "ACF-TIPO PROD TC",
