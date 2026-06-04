@@ -170,7 +170,7 @@ tasa = n_f / len(y) * 100
 print(f"  Fraude (1)             : {n_f:,}  ({tasa:.2f}%)")
 print(f"  No fraude (0)          : {n_nf:,}  ({100-tasa:.2f}%)")
 
-# ── Features limpias (sin leakage ni features muertas) ────────────────────
+# ── Features limpias (sin leakage, sin muertas, sin multicolinealidad) ────
 # EXCLUIDAS con justificación:
 #   N_FRAUDES_PREVIOS_CLI       → leaky: usa todo el período histórico
 #   FLAG_CLIENTE_YA_FRAUDULENTO → leaky: usa todo el período histórico
@@ -179,39 +179,42 @@ print(f"  No fraude (0)          : {n_nf:,}  ({100-tasa:.2f}%)")
 #   N_CVV_FAIL_24H              → muerta: cero varianza en este dataset
 #   HUBO_CVV_FAIL_PREVIO        → muerta: todo NaN
 #   RATIO_MONTO_VS_SALDO        → muerta: saldo vacío para débito (~97% NaN)
+#   TRX_CLIENTE_24H             → multicolineal: corr=0.9998 con TRX_TARJETA_24H
+#   MNT_TARJETA_24H             → multicolineal: corr=0.9985 con MNT_CLIENTE_24H
+#   TRX_CLIENTE_5MIN            → multicolineal: duplica TRX_TARJETA_5MIN
+#   HORA_DIA                    → IV=0.0125, WOE plano en todas las franjas
+#   ES_TRX_EXTRANJERO           → IV<0.01, sin poder predictivo
+#   FLAG_PAIS_DISTINTO_CLIENTE  → IV=0.0041, sin poder predictivo
 
 FEATURES = [f for f in [
     # Monto
     col_mto,
     "FLAG_MONTO_REDONDO",
     "FLAG_MONTO_BAJO",
-    # Velocidad cliente
-    "TRX_CLIENTE_5MIN",
+    # Velocidad tarjeta (se prefiere tarjeta sobre cliente — misma info, menos redundancia)
+    "TRX_TARJETA_5MIN",
+    "TRX_TARJETA_24H",
+    # Velocidad cliente (franjas distintas a las de tarjeta)
     "TRX_CLIENTE_1H",
-    "TRX_CLIENTE_24H",
     "MNT_CLIENTE_1H",
     "MNT_CLIENTE_24H",
     "GAP_MINUTOS",
-    # Velocidad tarjeta
-    "TRX_TARJETA_5MIN",
-    "TRX_TARJETA_24H",
-    "MNT_TARJETA_24H",
     # Z-scores e interacciones
     "ZSCORE_MONTO_CLIENTE",
     "ZSCORE_MONTO_CLI_COMERCIO",
     "ACELERACION_MONTO",
     "CONCENTRACION_5MIN_1H",
-    # Temporal
-    "HORA_DIA",
+    # Temporal (solo madrugada y fin de semana — HORA_DIA sin poder)
     "ES_MADRUGADA",
     "ES_FIN_SEMANA",
-    # Geografía
-    "ES_TRX_EXTRANJERO",
-    "FLAG_PAIS_DISTINTO_CLIENTE",
+    # Geografía (solo multi-país — los otros sin poder predictivo)
     "FLAG_MULTI_PAIS_24H",
     # MCC y canal
     "FLAG_MCC_ALTO_RIESGO",
     "FLAG_ECOMMERCE",
+    # Flags de velocidad
+    "FLAG_RAFAGA_5MIN",
+    "FLAG_VEL_ALTA_1H",
     # Perfil cliente vs comercio
     "RATIO_TRX_DIA_VS_HIST",
     "FLAG_MONTO_ALTO_CLI_COMERCIO",
