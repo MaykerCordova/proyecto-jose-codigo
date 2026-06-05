@@ -1,0 +1,126 @@
+Eres un analista experto en modelos de detección de fraude bancario.
+Te voy a dar el contexto completo de un proyecto de scoring de fraude
+que estoy desarrollando en Scotiabank Perú.
+
+═══════════════════════════════════════════════════════
+CONTEXTO DEL PROBLEMA
+═══════════════════════════════════════════════════════
+
+Área        : Prevención de Fraude Digital — Scotiabank Perú
+Tipo        : Tarjetas de débito comprometidas (segmento N7)
+Período     : Diciembre 2025 → Mayo 2026 (179 días, ~6 meses)
+Universo    : 170,944 transacciones de tarjetas comprometidas
+
+SITUACIÓN:
+Una tarjeta comprometida significa que el defraudador ya tiene
+los datos de la tarjeta (número, CVV, fecha de vencimiento).
+El banco no puede bloquear todas las tarjetas comprometidas
+porque generaría demasiada fricción al cliente legítimo,
+que sigue usando su tarjeta normalmente.
+
+DINÁMICA DE LA BASE:
+Sobre la misma tarjeta comprometida conviven DOS actores:
+  - Titular legítimo → transacciones normales → label: NO FRAUDE
+  - Defraudador      → transacciones sospechosas → label: FRAUDE
+
+Por eso el label fraude/no fraude está a nivel de TRANSACCIÓN,
+no a nivel de tarjeta.
+
+DISTRIBUCIÓN DEL TARGET:
+  F (Fraude confirmado)  :  2,288  (1.34%)
+  N (Normal)             : 168,411 (98.52%)
+  G (Buena confirmada)   :     49  (0.03%)
+  D (Descarte)           :    193  (0.11%)
+  P (Pendiente)          :      3  (0.00%)
+  TOTAL                  : 170,944
+
+Para el modelo usamos F=1 (fraude) y G+N=0 (no fraude).
+D y P se excluyen por ambigüedad. Desbalance 1:73.
+
+═══════════════════════════════════════════════════════
+HALLAZGOS CLAVE DEL EDA
+═══════════════════════════════════════════════════════
+
+1. El fraude N7 NO es de madrugada — pico a las 18-19h
+2. El fraude NO viene del extranjero — opera desde Perú
+3. La señal más fuerte es VELOCIDAD de transacciones:
+   - Fraude promedio: 12.6 txn en 24h vs 1.5 del legítimo
+   - Fraude promedio: 2,087 min de gap vs 6,718 del legítimo
+4. MCC más fraudulentos:
+   - 5411 Supermercados   → 6.58% tasa fraude
+   - 4829 Wire transfers  → 5.47% tasa fraude
+   - 4121 Taxis/Uber      → 2.50% con 759 fraudes (mayor volumen)
+5. Bolivia (BO): 9/9 transacciones son fraude (100%)
+6. Regla previa del jefe "monto >= 25" es débil — el fraude
+   promedia S/57 pero la señal real está en frecuencia
+
+═══════════════════════════════════════════════════════
+MODELO CONSTRUIDO
+═══════════════════════════════════════════════════════
+
+Tipo        : Regresión Logística (class_weight='balanced')
+Split       : 80% train / 20% test estratificado
+Features    : 30 variables (sin data leakage)
+AUC-ROC     : 0.9729 (Test)
+KS Statistic: 0.8297 (Test)
+Gini        : 0.9459 (Test)
+
+FEATURES EXCLUIDAS POR LEAKAGE:
+  - FLAG_CLIENTE_YA_FRAUDULENTO (usaba todo el período)
+  - HUBO_FRAUDE_PREVIO_24H (label retroactivo en snapshot)
+  - N_FRAUDES_PREVIOS_CLI (idem)
+
+FEATURES EXCLUIDAS POR MULTICOLINEALIDAD:
+  - TRX_CLIENTE_24H (corr=0.9998 con TRX_TARJETA_24H)
+  - MNT_TARJETA_24H (corr=0.9985 con MNT_CLIENTE_24H)
+  - TRX_CLIENTE_5MIN (duplica TRX_TARJETA_5MIN)
+
+FEATURES EXCLUIDAS SIN PODER PREDICTIVO:
+  - HORA_DIA (IV=0.0125, WOE plano)
+  - ES_TRX_EXTRANJERO (IV<0.01)
+  - FLAG_PAIS_DISTINTO_CLIENTE (IV=0.0041)
+
+LAS 30 FEATURES LIMPIAS DEL MODELO:
+  Monto     : monto, FLAG_MONTO_REDONDO, FLAG_MONTO_BAJO,
+              FLAG_TRX_EN_USD
+  Velocidad : TRX_TARJETA_5MIN, TRX_TARJETA_24H,
+              TRX_CLIENTE_1H, MNT_CLIENTE_1H,
+              MNT_CLIENTE_24H, GAP_MINUTOS
+  Z-scores  : ZSCORE_MONTO_CLIENTE, ZSCORE_MONTO_CLI_COMERCIO,
+              ACELERACION_MONTO, CONCENTRACION_5MIN_1H
+  Temporal  : ES_MADRUGADA, ES_FIN_SEMANA
+  Geografía : FLAG_MULTI_PAIS_24H
+  MCC/canal : FLAG_MCC_ALTO_RIESGO, FLAG_ECOMMERCE
+  Flags vel : FLAG_RAFAGA_5MIN, FLAG_VEL_ALTA_1H
+  Tipo txn  : ES_TOKENIZADA, ES_TARJETA_PRESENTE,
+              ES_MOTO, ES_SEGURO,
+              FLAG_COD_TRX_10, FLAG_COD_TRX_92
+  Perfil    : RATIO_TRX_DIA_VS_HIST,
+              FLAG_MONTO_ALTO_CLI_COMERCIO,
+              FLAG_CLI_OUTLIER_TICKET_COMERCIO,
+              SCORE_RIESGO
+
+UMBRALES OPERATIVOS SUGERIDOS:
+  P >= 0.90 → Declinar automáticamente
+  P >= 0.70 → Revisión manual / alerta
+  P <  0.70 → Aprobar
+
+RESULTADO DECILES (Test):
+  Top 10% de txn con mayor score → captura 91.7% de fraudes
+  Top 20% de txn                 → captura 98.5% de fraudes
+
+═══════════════════════════════════════════════════════
+REGLAS DERIVADAS PARA MONITOR
+═══════════════════════════════════════════════════════
+
+REGLA 1 — Velocidad extrema:
+  SI TRX_TARJETA_24H >= 5 Y GAP_MINUTOS <= 10 → ALERTAR
+
+REGLA 2 — MCC alto riesgo:
+  SI MCC IN (5411,4829,4722,4121) Y MONTO >= 50 → REVISAR
+
+REGLA 3 — País Bolivia:
+  SI PAIS = 'BO' → DECLINAR automáticamente
+
+Con este contexto completo, responde mis preguntas sobre
+los resultados que te voy a ir pasando a continuación.

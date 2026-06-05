@@ -1,0 +1,62 @@
+Basándote en el contexto del proyecto que ya tienes
+(fraude débito N7, Scotiabank Perú, modelo Regresión
+Logística, AUC=0.9729), analiza los siguientes
+resultados que me acaba de generar el script:
+
+═══════════════════════════════════════════════════════
+OUTPUT DE CONSOLA (3_ejecutar_ml.bat)
+═══════════════════════════════════════════════════════
+
+[PEGA AQUÍ EL OUTPUT DE CONSOLA DEL 3_ejecutar_ml.bat]
+
+═══════════════════════════════════════════════════════
+RESULTADOS DEL EXCEL (ml_scoring_TARJETAS_COMPROMETIDAS_N7.xlsx)
+═══════════════════════════════════════════════════════
+
+MÉTRICAS TRAIN VS TEST:
+[PEGA AQUÍ LA TABLA DE LA HOJA Metricas_Train_Test]
+
+MATRICES DE CONFUSIÓN:
+Train:
+[PEGA AQUÍ LA TABLA DE LA HOJA CM_Train]
+
+Test:
+[PEGA AQUÍ LA TABLA DE LA HOJA CM_Test]
+
+DECILES (Test):
+[PEGA AQUÍ LA TABLA DE LA HOJA Deciles_Test]
+
+TABLA DE UMBRALES OPERATIVOS:
+[PEGA AQUÍ LA TABLA DE LA HOJA Tabla_Umbrales]
+
+COEFICIENTES / ODDS RATIOS:
+[PEGA AQUÍ LA TABLA DE LA HOJA Coeficientes_LR]
+
+PSI POR FEATURE:
+[PEGA AQUÍ LA TABLA DE LA HOJA PSI_Features]
+
+DISTRIBUCIÓN DEL SCORE FINAL:
+[PEGA AQUÍ LA TABLA DE LA HOJA Dist_Score]
+
+═══════════════════════════════════════════════════════
+PREGUNTAS
+═══════════════════════════════════════════════════════
+
+Por favor responde:
+
+1. ¿El modelo está bien calibrado? ¿Hay sobreajuste
+   (diferencia grande entre Train y Test)?
+
+2. ¿Qué variables tienen los odds ratios más altos
+   y qué significa cada uno en términos de negocio?
+
+3. ¿Qué umbral operativo recomendarías para:
+   a) Declinar automáticamente
+   b) Revisión manual
+   Justifica con los números de Precision, Recall y FPR.
+
+4. ¿Hay algo en los resultados que sea contraintuitivo
+   o que merezca revisión antes de presentar?
+
+5. ¿Qué recomendarías como siguiente paso para mejorar
+   el modelo o las reglas operativas?
