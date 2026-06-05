@@ -294,7 +294,8 @@ col_scm = C.get("score_riesgo_mon", "")
 if col_scm and col_scm in df.columns:
     s = pd.to_numeric(df[col_scm], errors="coerce")
 
-    mask_tc   = (df["TIPO_PRODUCTO_TEXTO"] == "TC")
+    # TIPO_PRODUCTO_TEXTO mapea "TC"→"Credito", por eso se busca "Credito" (no "TC")
+    mask_tc   = df["TIPO_PRODUCTO_TEXTO"].isin({"TC", "Credito"})
     mask_visa = (df["MARCA_TARJETA"] == "VISA")
     mask_mc   = (df["MARCA_TARJETA"] == "MASTERCARD")
 

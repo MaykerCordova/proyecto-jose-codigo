@@ -949,7 +949,7 @@ if _has_scm and has_ind:
         ("MASTERCARD",  "MASTERCARD",  SCORE_MC_MAX),
     ]:
         mask_m = (
-            (df["TIPO_PRODUCTO_TEXTO"] == "TC") &
+            df["TIPO_PRODUCTO_TEXTO"].isin({"TC", "Credito"}) &
             (df["MARCA_TARJETA"] == marca_key) &
             df["SCORE_MON_NORM"].notna()
         )
@@ -978,7 +978,7 @@ if _has_scm and has_ind:
     # Threshold scan: cuánto fraude captura score_norm < X
     thresholds = [0.10, 0.20, 0.30, 0.40, 0.50]
     rows_thr = []
-    mask_tc_all = (df["TIPO_PRODUCTO_TEXTO"] == "TC") & df["SCORE_MON_NORM"].notna()
+    mask_tc_all = df["TIPO_PRODUCTO_TEXTO"].isin({"TC", "Credito"}) & df["SCORE_MON_NORM"].notna()
     n_f_tc  = int((mask_tc_all & mask_f).sum())
     n_nf_tc = int((mask_tc_all & mask_no_f).sum())
     for thr in thresholds:
@@ -1191,8 +1191,8 @@ if has_ind and n_fraudes > 0 and rows_rec:
     _q25 = float(df[col_monto].quantile(0.25))
     SEG: list = []
     if "TIPO_PRODUCTO_TEXTO" in df.columns:
-        SEG += [("TC",     df["TIPO_PRODUCTO_TEXTO"] == "TC"),
-                ("TD",     df["TIPO_PRODUCTO_TEXTO"] == "TD")]
+        SEG += [("TC",     df["TIPO_PRODUCTO_TEXTO"].isin({"TC", "Credito"})),
+                ("TD",     df["TIPO_PRODUCTO_TEXTO"].isin({"TD", "Debito"}))]
     if "ES_TOKENIZADA" in df.columns:
         SEG += [("NO_TOKENIZADA", df["ES_TOKENIZADA"] == 0),
                 ("TOKENIZADA",    df["ES_TOKENIZADA"] == 1)]
