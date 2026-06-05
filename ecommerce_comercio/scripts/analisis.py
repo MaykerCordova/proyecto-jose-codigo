@@ -100,6 +100,14 @@ n_normales  = int(mask_n.sum())      # N = transacciones sin alerta (el grueso r
 n_no_fraude = int(mask_no_f.sum())   # todo lo que NO es fraude (impacto real de una regla)
 
 print(f"  Filas    : {len(df):,}  |  Columnas: {df.shape[1]}")
+
+# ── Validar MODO_ANALISIS ─────────────────────────────────────────────────
+_MODOS_VALIDOS = {"COMERCIO", "MULTI", "MCC", "BIN", "SEGMENTO", "PAIS"}
+if MODO_ANALISIS not in _MODOS_VALIDOS:
+    print(f"\n❌  MODO_ANALISIS inválido: '{MODO_ANALISIS}'")
+    print(f"    Valores permitidos en config.py: {sorted(_MODOS_VALIDOS)}")
+    print(f"    Ejemplo: MODO_ANALISIS = \"COMERCIO\"")
+    sys.exit(1)
 print(f"  Modo     : {MODO_ANALISIS}")
 
 # ── Mapeo de MODO_ANALISIS → columna agrupadora ───────────────────────────
