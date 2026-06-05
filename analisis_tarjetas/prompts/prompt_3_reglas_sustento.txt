@@ -1,0 +1,114 @@
+════════════════════════════════════════════════════════════════
+PROMPT PARA IA DEL BANCO — ANÁLISIS DE REGLAS MONITOR
+Proyecto: Scoring Fraude Débito N7 — Scotiabank Perú
+════════════════════════════════════════════════════════════════
+
+Eres un analista experto en fraude bancario. Ya tienes el
+contexto completo del proyecto (ver prompt_1_contexto_proyecto).
+
+Te voy a pasar los resultados del script reglas_monitor.py
+que calculó la efectividad de cada regla propuesta para Monitor.
+
+Para cada regla necesito que me expliques:
+
+1. QUÉ SIGNIFICA LA REGLA en términos de negocio (sin tecnicismos)
+2. QUÉ ESTÁ CAPTURANDO (cuántos fraudes, en qué monto, cuántos clientes)
+3. CUÁNTO AFECTA AL CLIENTE LEGÍTIMO (el "costo" de aplicar la regla)
+4. SI ES RECOMENDABLE implementarla tal como está o ajustar el umbral
+5. CÓMO EXPLICÁRSELA AL JEFE en 2-3 oraciones simples
+
+════════════════════════════════════════════════════════════════
+CONTEXTO DE VARIABLES (para la interpretación)
+════════════════════════════════════════════════════════════════
+
+TRX_TARJETA_24H
+→ Cuántas veces se usó esa tarjeta en las últimas 24 horas
+→ Fraude promedio: 12.6 veces / Legítimo promedio: 1.5 veces
+→ El defraudador gasta rápido antes que bloqueen la tarjeta
+
+GAP_MINUTOS
+→ Minutos transcurridos desde la última transacción de esa tarjeta
+→ Fraude promedio: 2,087 min / Legítimo promedio: 6,718 min
+→ Gap bajo = compras en ráfaga = señal de defraudador
+
+SCORE_RIESGO (0 a 11 puntos)
+→ Puntaje que suma múltiples señales de alerta simultáneas:
+  ráfaga de velocidad, madrugada, multi-país, MCC riesgo, etc.
+→ Fraude promedio: 6.8 / Legítimo promedio: 4.0
+→ >= 7 significa que varias alertas están activas a la vez
+
+FLAG_RAFAGA_5MIN
+→ La tarjeta hizo 3+ transacciones en los últimos 5 minutos
+→ Cuando = 1: tasa de fraude 31.5% vs 1.2% cuando = 0
+→ La señal más poderosa después de SCORE_RIESGO
+
+MCC (Categoría del comercio)
+→ Código internacional que clasifica el tipo de negocio
+→ Los más fraudulentos en esta base:
+  5411 Supermercados:  6.6% fraude
+  4829 Wire transfers: 5.5% fraude
+  4121 Taxis/Uber:     2.5% fraude (pero 759 casos en volumen)
+→ Tasa promedio de la base: 1.34%
+
+MNT_CLIENTE_24H
+→ Monto total acumulado del cliente en las últimas 24 horas (S/)
+→ Fraude: S/174 promedio / Legítimo: S/99 promedio
+
+ES_SEGURO (3DS)
+→ 1 si la transacción pasó por autenticación Visa/Mastercard
+→ 0 = sin autenticación = mayor riesgo de fraude
+→ El defraudador tiende a evitar canales con autenticación
+
+════════════════════════════════════════════════════════════════
+RESULTADOS DEL SCRIPT reglas_monitor.py
+════════════════════════════════════════════════════════════════
+
+HOJA 1 — RESUMEN DE REGLAS:
+[PEGA AQUÍ EL CONTENIDO DE LA HOJA "Resumen_Reglas"]
+
+HOJA 2 — CASCADA ACUMULADA:
+[PEGA AQUÍ EL CONTENIDO DE LA HOJA "Cascada_Acumulada"]
+
+════════════════════════════════════════════════════════════════
+PREGUNTAS PARA LA IA
+════════════════════════════════════════════════════════════════
+
+Con base en los resultados anteriores, por favor:
+
+1. Para cada regla, dame una tabla con:
+   | Métrica              | Valor    | Interpretación           |
+   |----------------------|----------|--------------------------|
+   | Fraudes capturados   | X txn    | X% del total de fraudes  |
+   | Monto fraude         | S/ X     | Lo que protegemos        |
+   | Clientes fraude      | X        | Defraudadores bloqueados |
+   | Legítimas afectadas  | X txn    | Fricción al cliente      |
+   | Monto legítimo       | S/ X     | Costo de la regla        |
+   | Precision            | X%       | De los bloqueados, % real fraude |
+   | Recall               | X%       | Del fraude total, % capturado    |
+
+2. ¿Cuál regla tiene el mejor balance entre captura de fraude
+   y mínima afectación al cliente legítimo?
+
+3. ¿Qué orden de implementación recomendarías para presentar
+   a mi jefe como un plan de 3 fases?
+
+4. ¿Hay alguna combinación de reglas que sea más efectiva
+   que aplicarlas individualmente?
+
+5. Redacta el párrafo que yo le diría a mi jefe para justificar
+   cada regla con los números concretos de esta base.
+
+════════════════════════════════════════════════════════════════
+FORMATO DE REGLA PARA MONITOR
+════════════════════════════════════════════════════════════════
+
+Para cada regla aprobada, necesito que me la escribas
+en este formato listo para implementar en Monitor:
+
+NOMBRE        : [nombre corto de la regla]
+SEGMENTO      : Tarjetas débito N7 comprometidas
+CONDICIÓN     : [lógica en lenguaje Monitor]
+ACCIÓN        : [ALERTAR / REVISAR / DECLINAR]
+UMBRAL_AJUSTE : [si el umbral actual puede optimizarse]
+SUSTENTO      : [2-3 líneas con los números clave]
+PRIORIDAD     : [ALTA / MEDIA / BAJA]
