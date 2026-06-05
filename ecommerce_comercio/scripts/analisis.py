@@ -1,5 +1,5 @@
 """
-analisis.py — 20 hojas de análisis ecommerce por comercio
+analisis.py — 23 hojas de análisis ecommerce por comercio
 ──────────────────────────────────────────────────────────
 Lee data/consolidado_features.parquet y genera Excel.
 Ejecutar después de feature_engineering.py.
@@ -23,14 +23,16 @@ Hojas:
   16_Por_Pais           Distribución por país de origen
   17_Transac_Diaria     Txn por cliente por día (1/2/3/4/5+)
   18_Perfil_Riesgo      PERFIL_RIESGO × indicador + SCORE_RIESGO
-  19_Recomendaciones    Efectividad de cada flag como regla de control
+  19_Recomendaciones    Efectividad de cada flag individual como regla de control
   20_Muestra            500 filas con fraudes y features clave
   21_Score_Marca        Score Monitor por marca (Visa 0-99, MC 0-999) — solo TC
   22_Vinculos_Cliente   Reincidencia, primera txn denegada, zscore monto×comercio
+  23_Reglas_Combinadas  Pares de flags + segmentadores: captura vs afectación real
 """
 
 import sys
 import warnings
+import itertools
 import pandas as pd
 import numpy as np
 from pathlib import Path
@@ -50,7 +52,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import (
     COLS, PARQUET_FEATURES, EXCEL_OUTPUT, COMERCIO_NOMBRE,
-    SOLO_APROBADAS, UMBRALES_REGLA,
+    SOLO_APROBADAS, UMBRALES_REGLA, MODO_ANALISIS,
 )
 
 C = COLS
@@ -98,6 +100,21 @@ n_normales  = int(mask_n.sum())      # N = transacciones sin alerta (el grueso r
 n_no_fraude = int(mask_no_f.sum())   # todo lo que NO es fraude (impacto real de una regla)
 
 print(f"  Filas    : {len(df):,}  |  Columnas: {df.shape[1]}")
+print(f"  Modo     : {MODO_ANALISIS}")
+
+# ── Mapeo de MODO_ANALISIS → columna agrupadora ───────────────────────────
+_MODO_MAP = {
+    "MULTI"    : col_com,
+    "MCC"      : C.get("mcc", ""),
+    "BIN"      : col_bin,
+    "SEGMENTO" : "SEG_NOMBRE",
+    "PAIS"     : col_pais,
+}
+col_agrupador = _MODO_MAP.get(MODO_ANALISIS, "")   # vacío si COMERCIO
+col_agrupador = col_agrupador if (col_agrupador and col_agrupador in df.columns) else ""
+if col_agrupador:
+    print(f"  Agrupador: {col_agrupador} ({df[col_agrupador].nunique()} valores únicos)")
+
 if has_ind:
     print(f"  Indicador:\n{df[col_ind].value_counts().to_string()}")
 
@@ -196,6 +213,65 @@ def pivot_ind(col_dim, label_col=None, top_n=25):
     return piv.sort_values("TOTAL", ascending=False).head(top_n)
 
 
+def pivot_cli_monto(col_dim, label_col=None, top_n=30):
+    """
+    Clientes únicos, montos y severidad por indicador vs una dimensión.
+    Complementa pivot_ind() con las dimensiones de clientes y monto.
+    Severidad = Monto_F / Monto_TOTAL × 100 (tasa de fraude medida en soles).
+    """
+    use = label_col if (label_col and label_col in df.columns) else col_dim
+    if not use or use not in df.columns or not has_ind:
+        return pd.DataFrame()
+    if not col_cli or col_cli not in df.columns:
+        return pd.DataFrame()
+
+    top_vals = df[use].value_counts().head(top_n).index
+    df_sub = df[df[use].isin(top_vals)]
+
+    rows = []
+    for val in top_vals:
+        sub = df_sub[df_sub[use] == val]
+        row: dict = {use: val}
+
+        # — Clientes únicos por indicador —
+        for ind in ind_pres:
+            si = sub[sub[col_ind] == ind]
+            row[f"CLI_{ind}"] = int(si[col_cli].nunique()) if len(si) > 0 else 0
+        row["CLI_TOTAL"] = int(sub[col_cli].nunique())
+        n_cli_f = row.get("CLI_F", 0)
+        row["TASA_CLI_F%"] = round(n_cli_f / row["CLI_TOTAL"] * 100, 2) if row["CLI_TOTAL"] > 0 else 0.0
+
+        # — Montos por indicador —
+        for ind in ind_pres:
+            si = sub[sub[col_ind] == ind]
+            row[f"MONTO_{ind}"] = round(float(si[col_monto].sum()), 0) if len(si) > 0 else 0.0
+        row["MONTO_TOTAL"] = round(float(sub[col_monto].sum()), 0)
+
+        # — Severidad (tasa de fraude en soles, no en transacciones) —
+        monto_f = row.get("MONTO_F", 0.0)
+        row["SEVERIDAD_F%"] = round(monto_f / row["MONTO_TOTAL"] * 100, 2) if row["MONTO_TOTAL"] > 0 else 0.0
+
+        # — Ticket promedio fraude vs normales —
+        n_f_txn = int((sub[col_ind] == "F").sum()) if "F" in ind_pres else 0
+        n_n_txn = int((sub[col_ind] == "N").sum()) if "N" in ind_pres else 0
+        row["TICKET_PROM_F"] = round(monto_f / n_f_txn, 2) if n_f_txn > 0 else 0.0
+        row["TICKET_PROM_N"] = round(row.get("MONTO_N", 0.0) / n_n_txn, 2) if n_n_txn > 0 else 0.0
+
+        rows.append(row)
+
+    if not rows:
+        return pd.DataFrame()
+    result = pd.DataFrame(rows).set_index(use)
+    # Reordenar: primero clientes, luego montos, luego tickets
+    col_order = (
+        [f"CLI_{i}" for i in ind_pres if f"CLI_{i}" in result.columns]
+        + ["CLI_TOTAL", "TASA_CLI_F%"]
+        + [f"MONTO_{i}" for i in ind_pres if f"MONTO_{i}" in result.columns]
+        + ["MONTO_TOTAL", "SEVERIDAD_F%", "TICKET_PROM_F", "TICKET_PROM_N"]
+    )
+    return result[[c for c in col_order if c in result.columns]]
+
+
 def stats_por_ind(variables):
     """Media, mediana y P90 de cada variable por indicador."""
     if not has_ind or not variables:
@@ -268,9 +344,16 @@ df_seg   = pivot_ind(C.get("segmento",""), "SEG_NOMBRE")
 df_marca = pivot_ind(C.get("marca",""), "MARCA_TARJETA")
 df_eci   = pivot_ind(C.get("eci",""), "SEGURO")
 
+# Enriquecimiento: clientes + monto + severidad para las mismas dimensiones
+df_prod_cm  = pivot_cli_monto(col_tp, "TIPO_PRODUCTO_TEXTO")
+df_seg_cm   = pivot_cli_monto(C.get("segmento",""), "SEG_NOMBRE")
+df_marca_cm = pivot_cli_monto(C.get("marca",""), "MARCA_TARJETA")
+df_eci_cm   = pivot_cli_monto(C.get("eci",""), "SEGURO")
+
 # ── Hoja 6: Por BIN ───────────────────────────────────────────────────────
 print("[6] Por BIN...")
 df_bin_piv = pivot_ind(col_bin, col_bin, top_n=30)
+df_bin_cm  = pivot_cli_monto(col_bin, col_bin, top_n=30)
 
 # ── Hoja 7: Cruce Producto × Segmento ─────────────────────────────────────
 print("[7] Cruce producto × segmento...")
@@ -792,8 +875,10 @@ for flag in TODOS_FLAGS:
     pct_nof    = round(n_nof_af / n_no_fraude * 100, 2) if n_no_fraude > 0 else 0.0
     pct_imp    = round(n_impacta / total_trx  * 100, 2)
     precision  = round(n_f_cap  / n_impacta  * 100, 2) if n_impacta   > 0 else 0.0
-    # Ratio usando el impacto REAL (todo lo que no es F), no solo G
     ratio_real = round(pct_f / pct_nof, 2) if pct_nof > 0 else (999.0 if pct_f > 0 else 0.0)
+    # LIFT = Precision% / Tasa_Global_F% → cuántas veces más precisa es la regla vs el azar
+    # LIFT=1 → igual que el azar | LIFT=3 → 3x más precisa | LIFT>5 → excelente
+    lift = round((precision / 100) / (n_fraudes / total_trx), 2) if (n_fraudes > 0 and total_trx > 0) else 0.0
     rows_rec.append({
         "FLAG"                       : flag,
         "N_total_impactado"          : n_impacta,
@@ -803,15 +888,16 @@ for flag in TODOS_FLAGS:
         "Pct_fraude_capturado%"      : pct_f,
         # ── Impacto real (todo lo que no es F) ───────────
         "N_noFraude_afectado"        : n_nof_af,
-        "Pct_noFraude_afectado%"     : pct_nof,     # ← columna clave para evaluar daño colateral
+        "Pct_noFraude_afectado%"     : pct_nof,
         # ── Desglose del daño colateral ──────────────────
         "N_Normal_afectado(N)"       : n_n_af,
-        "Pct_Normal_afectado%(N)"    : pct_n,        # ← cuántas txn "sin alerta" bloquea la regla
+        "Pct_Normal_afectado%(N)"    : pct_n,
         "N_Buena_afectada(G)"        : n_g_af,
         "Pct_Buena_afectada%(G)"     : pct_g,
         # ── Calidad de la regla ───────────────────────────
-        "Precision%"                 : precision,    # fraudes / total_impactado
-        "Ratio_F_vs_noFraude"        : ratio_real,   # pct_fraude / pct_noFraude (>3 = buena regla)
+        "Precision%"                 : precision,
+        "Ratio_F_vs_noFraude"        : ratio_real,
+        "LIFT"                       : lift,         # Precision% / Tasa_global; >3 = buena regla
     })
 df_rec = (pd.DataFrame(rows_rec)
             .sort_values("Pct_fraude_capturado%", ascending=False)
@@ -1027,9 +1113,177 @@ if has_ind:
 print(f"  Vínculos — residente: {len(df_vinc_residente)} categorías | "
       f"reincid: {len(df_vinc_reincid)} | zscore: {len(df_vinc_zscore)}")
 
+# ── Hoja 0: Resumen por agrupador (solo si MODO != COMERCIO) ─────────────
+print("[0] Resumen por agrupador (modo {})...".format(MODO_ANALISIS))
+df_hoja0 = pd.DataFrame()
+tasa_global = round(n_fraudes / len(df) * 100, 4) if len(df) > 0 else 0.0
+
+if col_agrupador and has_ind:
+    _top_vals = df[col_agrupador].value_counts().head(50).index
+    _rows_h0  = []
+    for val in _top_vals:
+        sub  = df[df[col_agrupador] == val]
+        n_t  = len(sub)
+        n_f  = int((sub[col_ind] == "F").sum())
+        n_n  = int((sub[col_ind] == "N").sum())
+        mto_total = float(sub[col_monto].sum())
+        mto_f     = float(sub.loc[sub[col_ind] == "F", col_monto].sum()) if n_f > 0 else 0.0
+        mto_n     = float(sub.loc[sub[col_ind] == "N", col_monto].sum()) if n_n > 0 else 0.0
+        n_cli     = int(sub[col_cli].nunique()) if col_cli and col_cli in df.columns else 0
+        n_cli_f   = int(sub.loc[sub[col_ind] == "F", col_cli].nunique()) if (col_cli and col_cli in df.columns and n_f > 0) else 0
+        tasa_f    = round(n_f / n_t * 100, 2) if n_t > 0 else 0.0
+        tasa_cli  = round(n_cli_f / n_cli * 100, 2) if n_cli > 0 else 0.0
+        severidad = round(mto_f / mto_total * 100, 2) if mto_total > 0 else 0.0
+        ticket_f  = round(mto_f / n_f, 2) if n_f > 0 else 0.0
+        ticket_n  = round(mto_n / n_n, 2) if n_n > 0 else 0.0
+        # LIFT: cuántas veces más fraude tiene esta dimensión vs la tasa global
+        lift_txn  = round(tasa_f / tasa_global, 2) if tasa_global > 0 else 0.0
+        _rows_h0.append({
+            col_agrupador         : val,
+            "N_TRX"               : n_t,
+            "N_F"                 : n_f,
+            "TASA_F%"             : tasa_f,
+            "LIFT_vs_global"      : lift_txn,   # tasa_f / tasa_global; >1 = más fraude que promedio
+            "N_CLI_TOTAL"         : n_cli,
+            "N_CLI_F"             : n_cli_f,
+            "TASA_CLI_F%"         : tasa_cli,
+            "MONTO_TOTAL_S/"      : round(mto_total, 0),
+            "MONTO_F_S/"          : round(mto_f, 0),
+            "SEVERIDAD_F%"        : severidad,  # MONTO_F / MONTO_TOTAL
+            "TICKET_PROM_F_S/"    : ticket_f,
+            "TICKET_PROM_N_S/"    : ticket_n,
+        })
+    if _rows_h0:
+        df_hoja0 = (pd.DataFrame(_rows_h0)
+                    .sort_values("MONTO_F_S/", ascending=False)
+                    .reset_index(drop=True))
+        df_hoja0.index += 1
+        print(f"  Hoja 0: {len(df_hoja0)} filas")
+else:
+    print("  Modo COMERCIO o agrupador no disponible — sin hoja 0")
+
+
+# ── Hoja 23: Reglas combinadas ────────────────────────────────────────────
+print("[23] Reglas combinadas (pares + segmentadores)...")
+
+df_comb = pd.DataFrame()
+if has_ind and n_fraudes > 0 and rows_rec:
+    # Candidatos: top flags por Ratio individual (con al menos 3% del fraude capturado)
+    _top_ratio = sorted(rows_rec, key=lambda r: r["Ratio_F_vs_noFraude"], reverse=True)
+    CAND_TOP = [r["FLAG"] for r in _top_ratio if r["Pct_fraude_capturado%"] >= 3.0][:12]
+    CAND_ESTR = [f for f in [
+        "FLAG_RAFAGA_5MIN","FLAG_BIN12_REPETIDO_DIA","HUBO_CVV_FAIL_PREVIO",
+        "FLAG_SCORE_RIESGO_MON_ALTO","TIENE_FRAUDE_PREVIO_PERIODO",
+        "FLAG_PRIMERA_TRX_Y_DENEGADA","FLAG_MONTO_REDONDO","FLAG_REINCIDENTE",
+    ] if f in df.columns]
+    CANDIDATOS_COMB = list(dict.fromkeys(CAND_TOP + CAND_ESTR))[:15]
+
+    # Segmentadores dimensionales (dimensión × condición booleana)
+    _q75 = float(df[col_monto].quantile(0.75))
+    _q25 = float(df[col_monto].quantile(0.25))
+    SEG: list = []
+    if "TIPO_PRODUCTO_TEXTO" in df.columns:
+        SEG += [("TC",     df["TIPO_PRODUCTO_TEXTO"] == "TC"),
+                ("TD",     df["TIPO_PRODUCTO_TEXTO"] == "TD")]
+    if "ES_TOKENIZADA" in df.columns:
+        SEG += [("NO_TOKENIZADA", df["ES_TOKENIZADA"] == 0),
+                ("TOKENIZADA",    df["ES_TOKENIZADA"] == 1)]
+    if "MARCA_TARJETA" in df.columns:
+        for _m in ["VISA", "MASTERCARD"]:
+            if (df["MARCA_TARJETA"] == _m).sum() > 10:
+                SEG.append((_m, df["MARCA_TARJETA"] == _m))
+    SEG += [(f"MONTO>={_q75:.0f}", df[col_monto] >= _q75),
+            (f"MONTO<={_q25:.0f}", df[col_monto] <= _q25)]
+
+    def _eval_regla(desc: str, mask_r: "pd.Series") -> "dict | None":
+        n_imp = int(mask_r.sum())
+        if n_imp == 0:
+            return None
+        n_f   = int((mask_r & mask_f).sum())
+        n_nof = int((mask_r & mask_no_f).sum())
+        n_n   = int((mask_r & mask_n).sum())
+        mto_f = float(df.loc[mask_r & mask_f, col_monto].sum()) if n_f > 0 else 0.0
+        pct_f   = round(n_f   / n_fraudes   * 100, 2) if n_fraudes   > 0 else 0.0
+        pct_nof = round(n_nof / n_no_fraude * 100, 2) if n_no_fraude > 0 else 0.0
+        ratio   = round(pct_f / pct_nof, 2) if pct_nof > 0 else (999.0 if pct_f > 0 else 0.0)
+        prec    = round(n_f   / n_imp * 100, 2) if n_imp > 0 else 0.0
+        lift  = round((prec / 100) / (n_fraudes / len(df)), 2) if (n_fraudes > 0 and len(df) > 0) else 0.0
+        if prec >= 40 and ratio >= 5:
+            accion = "BLOQUEO DIRECTO"
+        elif prec >= 20 and ratio >= 3:
+            accion = "REVISIÓN MANUAL"
+        else:
+            accion = "ALERTA OPERATIVA"
+        return {
+            "REGLA"                 : desc,
+            "N_bloqueado"           : n_imp,
+            "N_F_capturado"         : n_f,
+            "Pct_F_capturado%"      : pct_f,
+            "Monto_F_capturado_S/"  : round(mto_f, 2),
+            "N_noFraude_afectado"   : n_nof,
+            "N_Normal_afectado(N)"  : n_n,
+            "Pct_noFraude_afectado%": pct_nof,
+            "Precision%"            : prec,
+            "Ratio_F_vs_noFraude"   : ratio,
+            "LIFT"                  : lift,
+            "Accion_recomendada"    : accion,
+        }
+
+    rows_comb: list = []
+
+    # A) Pares de flags (AND entre dos flags binarios)
+    for f1, f2 in itertools.combinations(CANDIDATOS_COMB, 2):
+        mask = df[f1].fillna(0).astype(bool) & df[f2].fillna(0).astype(bool)
+        row = _eval_regla(f"{f1}  AND  {f2}", mask)
+        if row and row["N_F_capturado"] >= 2:
+            rows_comb.append(row)
+
+    # B) Segmentador dimensional + flag (dimensión + condición binaria)
+    for seg_n, mask_seg in SEG:
+        for flag in CANDIDATOS_COMB:
+            mask = mask_seg & df[flag].fillna(0).astype(bool)
+            row = _eval_regla(f"{seg_n}  AND  {flag}", mask)
+            if row and row["N_F_capturado"] >= 2:
+                rows_comb.append(row)
+
+    # C) SCORE_RIESGO >= umbral (score compuesto)
+    if "SCORE_RIESGO" in df.columns:
+        for umb in [2, 3, 4, 5, 6]:
+            mask = df["SCORE_RIESGO"] >= umb
+            row = _eval_regla(f"SCORE_RIESGO >= {umb}", mask)
+            if row and row["N_F_capturado"] >= 2:
+                rows_comb.append(row)
+
+    # D) PERFIL_RIESGO acumulado (>= MEDIO, >= ALTO, == MUY_ALTO)
+    if "PERFIL_RIESGO" in df.columns:
+        for pf, vals in [
+            ("MEDIO_o_superior",  {"MEDIO","ALTO","MUY_ALTO"}),
+            ("ALTO_o_superior",   {"ALTO","MUY_ALTO"}),
+            ("MUY_ALTO",          {"MUY_ALTO"}),
+        ]:
+            mask = df["PERFIL_RIESGO"].isin(vals)
+            row = _eval_regla(f"PERFIL_RIESGO >= {pf}", mask)
+            if row and row["N_F_capturado"] >= 2:
+                rows_comb.append(row)
+
+    if rows_comb:
+        df_comb = (
+            pd.DataFrame(rows_comb)
+            .drop_duplicates(subset=["REGLA"])
+            .sort_values(["Ratio_F_vs_noFraude", "Pct_F_capturado%"],
+                         ascending=[False, False])
+            .reset_index(drop=True)
+        )
+        df_comb.index += 1
+        print(f"  Combinaciones válidas: {len(df_comb)}")
+    else:
+        print("  Sin combinaciones con suficientes datos")
+else:
+    print("  Sin datos de indicador — omitiendo combinaciones")
+
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. EXPORTAR EXCEL (22 hojas)
+# 4. EXPORTAR EXCEL (23 hojas)
 # ─────────────────────────────────────────────────────────────────────────────
 EXCEL_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 hoy  = datetime.today().strftime("%d/%m/%Y %H:%M")
@@ -1037,6 +1291,36 @@ modo = "SOLO APROBADAS" if SOLO_APROBADAS else "APROBADAS + DENEGADAS"
 print(f"\nExportando a: {EXCEL_OUTPUT}")
 
 with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
+
+    # ── 0: Resumen por agrupador (solo si MODO != COMERCIO) ───────────────
+    if not df_hoja0.empty:
+        _modo_label = {
+            "MULTI"   : "MULTI-COMERCIO (LIKE)",
+            "MCC"     : "POR MCC",
+            "BIN"     : "POR BIN",
+            "SEGMENTO": "POR SEGMENTO",
+            "PAIS"    : "POR PAÍS",
+        }.get(MODO_ANALISIS, MODO_ANALISIS)
+        sn = f"0_Resumen_{MODO_ANALISIS}"
+        ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+        fa = 1
+        nc = len(df_hoja0.columns) + 1
+        t_titulo(ws, fa, nc,
+            f"RANKING {_modo_label} — {COMERCIO_NOMBRE}  |  {hoy}  |  {modo}"); fa += 1
+        t_titulo(ws, fa, nc,
+            f"Tasa global F%: {tasa_global}%  |  Ordenado por MONTO_F_S/ desc  |  "
+            f"LIFT = TASA_F% de la fila / Tasa_global (>1 = más fraude que promedio)",
+            fill=FS); fa += 2
+        fa = escribir_df(ws, df_hoja0, fa, reset_idx=False)
+        t_interp(ws, fa, nc,
+            "LIFT_vs_global: cuántas veces más fraude tiene esta dimensión vs la tasa global. "
+            "LIFT=2 = el doble de fraude que el promedio. LIFT>3 = dimensión de alto riesgo. "
+            "SEVERIDAD_F% = Monto_F / Monto_Total — prioriza dimensiones por impacto en plata, no en txn. "
+            "TICKET_PROM_F vs TICKET_PROM_N: si TICKET_F >> TICKET_N = fraude de alto valor; "
+            "si TICKET_F << TICKET_N = card testing de bajo monto. "
+            "Ordena por MONTO_F_S/ para ver qué dimensión te está costando más dinero. "
+            "Ordena por LIFT para ver qué dimensión concentra más fraude relativo.")
+        t_autofit(ws)
 
     # ── 1: Resumen ────────────────────────────────────────────────────────
     sn = "1_Resumen"
@@ -1052,77 +1336,122 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
         "volumen o tasa. TOTAL en la última fila es el consolidado de todo el periodo analizado.")
     t_autofit(ws)
 
+    def _escribir_pivot_doble(ws, df_txn, df_cm, titulo_hoja, titulo_sub_b,
+                              interp_txn, interp_cm):
+        """
+        Escribe dos sub-tablas en la misma hoja:
+          Sub-tabla A: transacciones por indicador (df_txn)
+          Sub-tabla B: clientes únicos + monto + severidad (df_cm)
+        """
+        fa = 1
+        nc_a = df_txn.shape[1] + 1
+        nc_b = df_cm.shape[1] + 1 if not df_cm.empty else 0
+        nc_max = max(nc_a, nc_b)
+        t_titulo(ws, fa, nc_max, titulo_hoja); fa += 2
+        # Sub-tabla A
+        t_titulo(ws, fa, nc_a,
+                 "A. VOLUMEN DE TRANSACCIONES POR INDICADOR  |  TASA_F% = fraude/total txn",
+                 fill=FS); fa += 1
+        fa = escribir_df(ws, df_txn, fa)
+        t_interp(ws, fa, nc_a, interp_txn); fa += 2
+        # Sub-tabla B
+        if not df_cm.empty:
+            t_titulo(ws, fa, nc_b, titulo_sub_b, fill=FS); fa += 1
+            fa = escribir_df(ws, df_cm, fa)
+            t_interp(ws, fa, nc_b, interp_cm); fa += 2
+        t_autofit(ws)
+
+    _INTERP_CM = (
+        "CLI_F = clientes únicos con fraude | CLI_TOTAL = todos los clientes únicos | "
+        "TASA_CLI_F% = % de clientes que tuvieron fraude (puede diferir de TASA_F% si un cliente tiene varias txn). "
+        "MONTO_F = soles de fraude | SEVERIDAD_F% = MONTO_F / MONTO_TOTAL (tasa de fraude medida en plata, no en txn). "
+        "TICKET_PROM_F vs TICKET_PROM_N: si TICKET_PROM_F >> TICKET_PROM_N, los fraudes van por montos altos; "
+        "si TICKET_PROM_F << TICKET_PROM_N, es card testing de bajo monto.")
+
     # ── 2: Por Producto ───────────────────────────────────────────────────
     if not df_prod.empty:
-        sn = "2_Por_Producto"; nc = df_prod.shape[1] + 1
-        df_prod.to_excel(writer, sheet_name=sn, startrow=3)
-        ws = writer.sheets[sn]
-        t_titulo(ws, 1, nc, "DISTRIBUCIÓN POR TIPO DE PRODUCTO (TC / TD)")
-        t_titulo(ws, 2, nc, "Filas = tipo producto | Columnas = indicador | TASA_F% = fraude/total", fill=FS)
-        t_encabezado(ws, 4)
-        t_interp(ws, ws.max_row + 1, nc,
-            "Compara TASA_F% entre TC (crédito) y TD (débito). "
-            "Si TC tiene TASA mayor, los fraudes prefieren tarjetas de crédito en este comercio. "
-            "Una diferencia >2x entre TC y TD sugiere que el tipo de producto es buen discriminador para una regla.")
-        t_autofit(ws)
+        sn = "2_Por_Producto"
+        ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+        _escribir_pivot_doble(
+            ws, df_prod, df_prod_cm,
+            titulo_hoja="DISTRIBUCIÓN POR TIPO DE PRODUCTO (TC / TD)",
+            titulo_sub_b="B. CLIENTES ÚNICOS + MONTO + SEVERIDAD POR TIPO DE PRODUCTO",
+            interp_txn=(
+                "Compara TASA_F% entre TC (crédito) y TD (débito). "
+                "Una diferencia >2x entre TC y TD sugiere que el tipo de producto discrimina bien para una regla. "
+                "Débito no tiene score Monitor — las reglas para TD deben basarse en velocidad, BIN y monto."),
+            interp_cm=_INTERP_CM,
+        )
 
     # ── 3: Por Segmento ───────────────────────────────────────────────────
     if not df_seg.empty:
-        sn = "3_Por_Segmento"; nc = df_seg.shape[1] + 1
-        df_seg.to_excel(writer, sheet_name=sn, startrow=3)
-        ws = writer.sheets[sn]
-        t_titulo(ws, 1, nc, "DISTRIBUCIÓN POR SEGMENTO DE CLIENTE")
-        t_titulo(ws, 2, nc, "Segmento VAA (SEG_NOMBRE generado) | TASA_F% por segmento", fill=FS)
-        t_encabezado(ws, 4)
-        t_interp(ws, ws.max_row + 1, nc,
-            "Identifica qué segmento concentra más fraudes. Affluent/Premium con TASA_F alta indica "
-            "fraude de alto valor. Mass con muchos casos puede ser fraude masivo de bajo ticket. "
-            "Compara siempre la TASA_F% del segmento con la tasa global en la hoja Resumen.")
-        t_autofit(ws)
+        sn = "3_Por_Segmento"
+        ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+        _escribir_pivot_doble(
+            ws, df_seg, df_seg_cm,
+            titulo_hoja="DISTRIBUCIÓN POR SEGMENTO DE CLIENTE",
+            titulo_sub_b="B. CLIENTES ÚNICOS + MONTO + SEVERIDAD POR SEGMENTO",
+            interp_txn=(
+                "Identifica qué segmento concentra más fraudes. Affluent/Premium con TASA_F alta indica "
+                "fraude de alto valor. Mass con muchos casos puede ser fraude masivo de bajo ticket. "
+                "Compara TASA_F% del segmento con la tasa global de la hoja Resumen."),
+            interp_cm=_INTERP_CM,
+        )
 
     # ── 4: Por Marca ──────────────────────────────────────────────────────
     if not df_marca.empty:
-        sn = "4_Por_Marca"; nc = df_marca.shape[1] + 1
-        df_marca.to_excel(writer, sheet_name=sn, startrow=3)
-        ws = writer.sheets[sn]
-        t_titulo(ws, 1, nc, "DISTRIBUCIÓN POR MARCA DE TARJETA (VISA / MASTERCARD)")
-        t_titulo(ws, 2, nc, "Filas = marca | Columnas = indicador | TASA_F% por marca", fill=FS)
-        t_encabezado(ws, 4)
-        t_interp(ws, ws.max_row + 1, nc,
-            "Si una marca tiene TASA_F% significativamente mayor, puede indicar que los defraudadores "
-            "prefieren tarjetas de esa franquicia en este comercio, o que hay menor protección de fraude "
-            "en esa marca. Útil para diseñar reglas diferenciadas Visa vs Mastercard.")
-        t_autofit(ws)
+        sn = "4_Por_Marca"
+        ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+        _escribir_pivot_doble(
+            ws, df_marca, df_marca_cm,
+            titulo_hoja="DISTRIBUCIÓN POR MARCA DE TARJETA (VISA / MASTERCARD)",
+            titulo_sub_b="B. CLIENTES ÚNICOS + MONTO + SEVERIDAD POR MARCA",
+            interp_txn=(
+                "Si una marca tiene TASA_F% significativamente mayor, los defraudadores prefieren "
+                "esa franquicia en este comercio. Útil para diseñar reglas diferenciadas Visa vs Mastercard. "
+                "Ver hoja 21 para el análisis de score Monitor por marca."),
+            interp_cm=_INTERP_CM,
+        )
 
     # ── 5: Por ECI ────────────────────────────────────────────────────────
     if not df_eci.empty:
-        sn = "5_Por_ECI"; nc = df_eci.shape[1] + 1
-        df_eci.to_excel(writer, sheet_name=sn, startrow=3)
-        ws = writer.sheets[sn]
-        t_titulo(ws, 1, nc, "DISTRIBUCIÓN POR SEGURIDAD ECI / 3DS")
-        t_titulo(ws, 2, nc,
-            "Seguro = ECI 2/02 (MC) o 5/05 (Visa) = autenticado con 3DS | "
-            "No Seguro = sin autenticación", fill=FS)
-        t_encabezado(ws, 4)
-        t_interp(ws, ws.max_row + 1, nc,
-            "Si 'No Seguro' concentra la mayoría de fraudes confirma que el comercio no exige 3DS "
-            "y ese es el vector principal. Si 'Seguro' también tiene fraude puede haber compromiso "
-            "posterior a la autenticación (OTP comprometida) o error de mapeo de ECI.")
-        t_autofit(ws)
+        sn = "5_Por_ECI"
+        ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+        _escribir_pivot_doble(
+            ws, df_eci, df_eci_cm,
+            titulo_hoja="DISTRIBUCIÓN POR SEGURIDAD ECI / 3DS",
+            titulo_sub_b="B. CLIENTES ÚNICOS + MONTO + SEVERIDAD POR ECI",
+            interp_txn=(
+                "Seguro = ECI 2/02 (MC) o 5/05 (Visa) = autenticado con 3DS | No Seguro = sin autenticación. "
+                "Si 'No Seguro' concentra la mayoría de fraudes confirma que el comercio no exige 3DS. "
+                "Si 'Seguro' también tiene fraude puede haber compromiso posterior a la autenticación."),
+            interp_cm=_INTERP_CM,
+        )
 
     # ── 6: Por BIN ────────────────────────────────────────────────────────
     if not df_bin_piv.empty:
-        sn = "6_Por_BIN"; nc = df_bin_piv.shape[1] + 1
-        df_bin_piv.to_excel(writer, sheet_name=sn, startrow=3)
-        ws = writer.sheets[sn]
-        t_titulo(ws, 1, nc, "TOP BINS POR VOLUMEN Y TASA DE FRAUDE")
-        t_titulo(ws, 2, nc, "BIN = primeros 6 dígitos de la tarjeta | Top 30 por TOTAL | TASA_F% por BIN", fill=FS)
-        t_encabezado(ws, 4)
-        t_interp(ws, ws.max_row + 1, nc,
-            "BINs con TASA_F% alta son vectores de fraude concentrados: todos los fraudes vienen de pocas tarjetas "
-            "del mismo rango. Si el mismo BIN aparece en muchos fraudes con distintas tarjetas, puede ser "
-            "card testing. Combinar con hoja 13 (BIN12) para confirmar.")
-        t_autofit(ws)
+        sn = "6_Por_BIN"
+        ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+        _escribir_pivot_doble(
+            ws, df_bin_piv, df_bin_cm,
+            titulo_hoja="TOP BINs — VOLUMEN · CLIENTES · MONTO · SEVERIDAD",
+            titulo_sub_b=(
+                "B. CLIENTES ÚNICOS + MONTO + SEVERIDAD POR BIN  |  "
+                "SEVERIDAD_F% = Monto_F / Monto_TOTAL (tasa de fraude en soles)"),
+            interp_txn=(
+                "Sub-tabla A: transacciones por indicador. TASA_F% = tasa por volumen de transacciones. "
+                "BINs con TASA_F% alta = vector de fraude concentrado. "
+                "BIN con muchos fraudes en tarjetas distintas = card testing. "
+                "Combinar con hoja 12 sección F (deciles por BIN caliente)."),
+            interp_cm=(
+                "Sub-tabla B: la dimensión más importante para priorizar BINs. "
+                "CLI_F = cuántos clientes distintos tuvieron fraude en ese BIN. "
+                "MONTO_F = soles de fraude — un BIN con 10 fraudes de S/5,000 cada uno (S/50,000) "
+                "es más crítico que un BIN con 55 fraudes de S/50 cada uno (S/2,750). "
+                "SEVERIDAD_F% = % del monto total del BIN que fue fraude (mayor = más grave en plata). "
+                "TICKET_PROM_F vs TICKET_PROM_N: "
+                "TICKET_F >> TICKET_N = fraude de alto valor; TICKET_F << TICKET_N = card testing."),
+        )
 
     # ── 7: Cruce Producto × Segmento ──────────────────────────────────────
     sn = "7_Cruce_Prod_Seg"
@@ -1690,12 +2019,40 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
 
     t_autofit(ws)
 
+    # ── 23: Reglas combinadas ─────────────────────────────────────────────────
+    if not df_comb.empty:
+        sn = "23_Reglas_Combinadas"
+        ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+        fa = 1
+        nc = len(df_comb.columns) + 1
+        t_titulo(ws, fa, nc,
+            f"REGLAS COMBINADAS — CAPTURA DE FRAUDE vs AFECTACIÓN — {COMERCIO_NOMBRE}"); fa += 1
+        t_titulo(ws, fa, nc,
+            f"Total fraudes: {n_fraudes} | Total no-fraude: {n_no_fraude} | "
+            f"Tasa global: {round(n_fraudes/(n_fraudes+n_no_fraude)*100,2) if (n_fraudes+n_no_fraude)>0 else 0}% "
+            f"| Ordenado por Ratio_F_vs_noFraude desc",
+            fill=FS); fa += 2
+        fa = escribir_df(ws, df_comb, fa, reset_idx=False)
+        t_interp(ws, fa, nc,
+            "BLOQUEO DIRECTO (Precision≥40% y Ratio≥5): captura fraude con poco daño colateral — aplicar automáticamente. "
+            "REVISIÓN MANUAL (Precision≥20% y Ratio≥3): bloquear para revisión del analista antes de liberar. "
+            "ALERTA OPERATIVA: señal de riesgo, no bloquear — monitorear. "
+            "N_noFraude_afectado = N + G + D + P (todo lo que no es fraude confirmado). "
+            "N_Normal_afectado(N) = solo las txn sin alerta previa (el mayor daño colateral real). "
+            "Estrategia óptima: combinar la regla de mayor Precision% (alta confianza) "
+            "con la de mayor Pct_F_capturado% (alto alcance) para cubrir el mayor % del fraude "
+            "minimizando el bloqueo de clientes legítimos.")
+        t_autofit(ws)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. RESUMEN FINAL
 # ─────────────────────────────────────────────────────────────────────────────
 print(f"\n✅ Excel generado: {EXCEL_OUTPUT}")
+print(f"   Modo: {MODO_ANALISIS}")
 print("   Hojas:")
+if not df_hoja0.empty:
+    print(f"   ✅ 0_Resumen_{MODO_ANALISIS}  ← NUEVA (ranking por {col_agrupador})")
 hojas = [
     "1_Resumen","2_Por_Producto","3_Por_Segmento","4_Por_Marca","5_Por_ECI",
     "6_Por_BIN","7_Cruce_Prod_Seg","8_Cruce_BIN_Prod",
@@ -1703,7 +2060,7 @@ hojas = [
     "12_Deciles_Monto","13_Apertura_Decil10","14_Motivos_Rechazo",
     "15_CVV_Tokenizadas","16_Por_Pais","17_Transac_Diaria",
     "18_Perfil_Riesgo","19_Recomendaciones","20_Muestra",
-    "21_Score_Marca","22_Vinculos_Cliente",
+    "21_Score_Marca","22_Vinculos_Cliente","23_Reglas_Combinadas",
 ]
 for h in hojas:
     print(f"   ✅ {h}")

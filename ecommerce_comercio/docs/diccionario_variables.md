@@ -562,8 +562,8 @@ Estos flags se generan automáticamente desde los umbrales en `config.py → UMB
 ---
 
 ### `SCORE_RIESGO`
-- **Qué es:** Suma de señales de riesgo activas en la transacción (0 a 9)
-- **Cómo se calcula:** Cada uno de los 9 flags del score suma 1 punto si está activo:
+- **Qué es:** Suma de señales de riesgo activas en la transacción (0 a 11)
+- **Cómo se calcula:** Cada uno de los 11 flags suma 1 punto si está activo:
   1. `FLAG_RAFAGA_5MIN` — ráfaga en 5 min
   2. `FLAG_VEL_ALTA_1H` — velocidad alta en 1h
   3. `HUBO_FRAUDE_PREVIO_24H` — fraude previo
@@ -573,12 +573,14 @@ Estos flags se generan automáticamente desde los umbrales en `config.py → UMB
   7. `FLAG_REINCIDENTE` — cliente reincidente
   8. `FLAG_PAIS_INUSUAL` — país atípico
   9. `FLAG_BIN12_REPETIDO_DIA` — BIN12 repetido
+  10. `FLAG_SCORE_RIESGO_MON_ALTO` — score Monitor alto (solo crédito)
+  11. `FLAG_HORA_FUERA_PERFIL_COMERCIO` — txn en hora atípica para el comercio
 
 - **Interpretación:**
-  - `0` → BAJO: sin señales. Fraude posible pero sin patrones automatizados.
-  - `1` → MEDIO: una señal. Monitoreo.
-  - `2–3` → ALTO: varias señales. Revisar urgente.
-  - `≥ 4` → MUY_ALTO: múltiples señales simultáneas. Bloquear o intervención inmediata.
+  - `0` → BAJO: sin señales.
+  - `1–2` → MEDIO: señales leves. Monitoreo.
+  - `3–5` → ALTO: varias señales. Revisar urgente.
+  - `6+` → MUY_ALTO: múltiples señales simultáneas. Bloquear o intervención inmediata.
 
 - **Ejemplo práctico:**
   ```
@@ -586,7 +588,8 @@ Estos flags se generan automáticamente desde los umbrales en `config.py → UMB
   + 4 txn en los últimos 5 min (FLAG_RAFAGA_5MIN=1)
   + Monto exacto de S/100 (FLAG_MONTO_REDONDO=1)
   + Mismo BIN12 en 3 tarjetas ese día (FLAG_BIN12_REPETIDO_DIA=1)
-  SCORE_RIESGO = 4 → MUY_ALTO
+  + Score Visa = 85/99 (FLAG_SCORE_RIESGO_MON_ALTO=1)
+  SCORE_RIESGO = 5 → ALTO
   ```
 
 ---
@@ -601,6 +604,191 @@ Estos flags se generan automáticamente desde los umbrales en `config.py → UMB
 ### `FLAG_HORARIO_RIESGO`
 - **Qué es:** Flag si la txn ocurrió en madrugada O en fin de semana
 - **Interpretar:** Horario con menor vigilancia humana. Si `FLAG_HORARIO_RIESGO=1` y `SCORE_RIESGO>=2`, el contexto de menor vigilancia amplifica el riesgo.
+
+---
+
+---
+
+## BLOQUE M — Score Monitor Normalizado
+*¿Qué tan riesgosa considera el sistema del banco a esta tarjeta?*
+
+> **Solo aplica a tarjetas de CRÉDITO.** Débito no tiene score Monitor. Visa escala 0–99, Mastercard 0–999.
+
+---
+
+### `SCORE_MON_NORM`
+- **Qué es:** Score del sistema Monitor normalizado a escala 0–1 para poder comparar Visa y Mastercard en la misma escala
+- **Fórmula:** `SCORE_MON_NORM = score_original ÷ máximo_de_la_marca` (Visa: ÷99, MC: ÷999)
+- **Ejemplo:** Visa con score 72 → `SCORE_MON_NORM = 72/99 = 0.73` | MC con score 650 → `SCORE_MON_NORM = 650/999 = 0.65`
+- **Interpretar:** Mayor valor = el sistema de fraude del banco ya considera esa tarjeta más riesgosa. Un SCORE_MON_NORM > 0.7 significa que el propio sistema de alertas está encendido para esa tarjeta.
+- **Importante:** Para débito, este campo es NaN — no usar en reglas de débito.
+- **Combinar con:** `FLAG_RAFAGA_5MIN` — si el sistema ya la tiene como riesgosa Y hay ráfaga, es fraude con muy alta probabilidad.
+
+---
+
+### `FLAG_SCORE_RIESGO_MON_ALTO`
+- **Qué es:** Flag si el `SCORE_MON_NORM ≥ 0.7` (score alto para la marca)
+- **Valores:** `1` = score alto | `0` = score bajo o débito
+- **Ejemplo:** Tarjeta Visa con score 80/99 → `FLAG_SCORE_RIESGO_MON_ALTO = 1`
+- **Para la regla:** Este flag entra al `SCORE_RIESGO` compuesto (componente 10 de 11).
+
+---
+
+### `CATEGORIA_SCORE_MON`
+- **Qué es:** Categoría del score en texto para facilitar la lectura
+- **Valores:** `BAJO` (0–0.3) | `MEDIO` (0.3–0.5) | `MEDIO_ALTO` (0.5–0.7) | `ALTO` (0.7–0.85) | `MUY_ALTO` (>0.85) | `SIN_SCORE` (débito)
+- **Usar en:** Hoja 21 del Excel (Score por marca) — ver la distribución de fraudes por categoría de score.
+
+---
+
+## BLOQUE N — Vínculos del Cliente
+*¿El cliente tiene historial de fraude o comportamiento inusual en este comercio?*
+
+---
+
+### `N_FRAUDES_CLIENTE_PERIODO`
+- **Qué es:** Cuántas transacciones marcadas como fraude tiene ese cliente en todo el período analizado
+- **Ejemplo:** `N_FRAUDES_CLIENTE_PERIODO = 3` → ese cliente tiene 3 fraudes confirmados en el dataset
+- **Interpretar:** Si es > 0, la tarjeta/cliente ha sido comprometida repetidamente y no fue bloqueada a tiempo. Cada fraude adicional es una falla en la gestión de bloqueos.
+- **Combinar con:** `FLAG_PRIMERA_TRX_Y_DENEGADA` — si tiene fraudes previos Y la primera txn del día fue denegada, es un patrón de reintento de fraude conocido.
+
+---
+
+### `TIENE_FRAUDE_PREVIO_PERIODO`
+- **Qué es:** Flag si el cliente tiene al menos 1 fraude previo en el período
+- **Valores:** `1` = tiene antecedente | `0` = sin antecedente
+- **Ejemplo:** Cliente con 2 fraudes marcados → `TIENE_FRAUDE_PREVIO_PERIODO = 1`
+- **Para la regla:** Alta precisión, bajo recall. El 100% de las txn con este flag pertenecen a tarjetas ya comprometidas.
+
+---
+
+### `ES_RESIDENTE`
+- **Qué es:** Flag si el cliente es residente en Perú según el país registrado en la tarjeta
+- **Valores:** `1` = residente PE | `0` = no residente / extranjero
+- **Interpretar:** La mayoría del fraude en ecommerce peruano viene de tarjetas locales comprometidas. Si hay fraude en tarjetas no residentes (`ES_RESIDENTE=0`), puede ser fraude transnacional — tarjetas extranjeras usadas en Perú.
+- **Combinar con:** `FLAG_PAIS_INUSUAL` — si no es residente Y el país de la txn es inusual, es señal fuerte de fraude transnacional.
+
+---
+
+### `ZSCORE_MONTO_CLI_COMERCIO`
+- **Qué es:** Cuántas desviaciones estándar se aleja el monto de esta txn del promedio histórico de ese cliente en **este comercio específico**
+- **Diferencia vs `ZSCORE_MONTO_CLIENTE`:** El bloque E compara al cliente consigo mismo en todos los comercios. Este compara al cliente consigo mismo solo en este comercio.
+- **Fórmula:** `(monto_actual - media_cliente_en_comercio) ÷ std_cliente_en_comercio`
+- **Ejemplo:** Cliente que siempre gasta S/80 en ZARA → aparece una txn de S/450 → `ZSCORE_MONTO_CLI_COMERCIO = 4.6`
+- **Interpretar:**
+  - `> 3.0` → monto atípico para ese cliente en ese comercio específico. Muy sospechoso.
+  - `0–1.5` → dentro del rango habitual del cliente en el comercio.
+- **Por qué es mejor que el zscore global:** Un cliente puede gastar S/500 habitualmente en otros comercios, pero si en ZARA siempre gasta S/80 y aparece S/500, es inusual. El zscore global no detectaría eso.
+
+---
+
+### `TRX_DIA_PROM_CLIENTE_COMERCIO`
+- **Qué es:** Promedio de transacciones por día que hace ese cliente en este comercio, calculado sobre su historial
+- **Ejemplo:** `TRX_DIA_PROM_CLIENTE_COMERCIO = 1.2` → en promedio hace 1.2 txn por día cuando visita el comercio
+- **Usar con:** `FLAG_TRX_EXCEDE_PATRON_CLI_COM`
+
+---
+
+### `FLAG_TRX_EXCEDE_PATRON_CLI_COM`
+- **Qué es:** Flag si el número de txn del cliente en el día actual excede su promedio histórico en este comercio
+- **Valores:** `1` = excede su patrón habitual | `0` = dentro de lo normal
+- **Ejemplo:** Cliente que en promedio hace 1 txn por día en ZARA → hoy tiene 4 → `FLAG_TRX_EXCEDE_PATRON_CLI_COM = 1`
+- **Interpretar:** Más discriminante que un umbral fijo (como "≥3 txn") porque se adapta a cada cliente. Un cliente frecuente con 3 txn puede ser normal; para otro con historial de 1 txn/visita, 3 es una anomalía.
+
+---
+
+### `FLAG_PRIMERA_TRX_Y_DENEGADA`
+- **Qué es:** Flag si la primera transacción del cliente en el día fue denegada antes de la txn actual
+- **Valores:** `1` = sí hubo un rechazo previo hoy | `0` = no
+- **Ejemplo:** Cliente intenta a las 9am, le deniegan → vuelve a las 9:02am → `FLAG_PRIMERA_TRX_Y_DENEGADA = 1`
+- **Interpretar:** El defraudador probó primero, falló, y reintentó con ajustes. Es el patrón de ensayo-error de card testing. La txn actual es el "segundo intento exitoso" luego de un fallo.
+- **Combinar con:** `HUBO_CVV_FAIL_PREVIO` — si la primera fue denegada por CVV + esta tiene distinto CVV = cascada CVV activa.
+
+---
+
+## BLOQUE O — Perfil Horario del Comercio
+*¿Esta txn está dentro del horario típico de actividad del comercio?*
+
+---
+
+### `HORA_PROM_COMERCIO`
+- **Qué es:** Hora promedio a la que suelen ocurrir las transacciones en este comercio (en el dataset)
+- **Ejemplo:** `HORA_PROM_COMERCIO = 14.3` → el comercio tiene actividad promedio a las 2:18pm
+- **Usar con:** `FLAG_HORA_FUERA_PERFIL_COMERCIO` para entender qué tan lejos está la txn actual de la hora típica.
+
+---
+
+### `HORA_STD_COMERCIO`
+- **Qué es:** Desviación estándar de la hora de actividad del comercio
+- **Ejemplo:** `HORA_STD_COMERCIO = 3.2` → la actividad del comercio varía ±3.2 horas respecto al promedio
+- **Interpretar:** Un comercio con `HORA_STD` bajo tiene actividad muy concentrada en un horario (ej: tienda de ropa, activa 10am–8pm). Un comercio con `HORA_STD` alto opera casi las 24h. Para los primeros, una txn a las 3am es más inusual.
+
+---
+
+### `FLAG_HORA_FUERA_PERFIL_COMERCIO`
+- **Qué es:** Flag si la hora de la txn está a más de 2 desviaciones estándar del horario típico del comercio
+- **Valores:** `1` = hora atípica para este comercio | `0` = dentro del perfil normal
+- **Ejemplo:** Comercio activo habitualmente de 10am–9pm (HORA_PROM=15, HORA_STD=2.5) → txn a las 3am → `FLAG_HORA_FUERA_PERFIL_COMERCIO = 1`
+- **Por qué es mejor que `ES_MADRUGADA`:** `ES_MADRUGADA` siempre marca de 0–5am sin importar el comercio. Este flag se adapta: si el comercio opera 24h (como Western Union online), una txn a las 3am puede ser normal y este flag = 0.
+- **Para la regla:** Entra al `SCORE_RIESGO` compuesto (componente 11 de 11).
+
+---
+
+### `TRX_PROM_CLIENTE_DIA_COMERCIO`
+- **Qué es:** Promedio de transacciones diarias que hace el cliente en el comercio, calculado sobre días en los que el cliente tuvo actividad
+- **Usar con:** `FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO`
+
+---
+
+### `FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO`
+- **Qué es:** Flag si el número de txn del cliente en el día actual supera el doble de su promedio diario en el comercio
+- **Valores:** `1` = actividad anormalmente alta para ese cliente en ese comercio | `0` = normal
+- **Ejemplo:** Cliente que promedia 1.5 txn/día en Amazon → hoy tiene 5 → `FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO = 1`
+- **Diferencia vs `FLAG_TRX_EXCEDE_PATRON_CLI_COM`:** Este usa "doble del promedio" como umbral; el otro solo verifica si excede el promedio. Este es más tolerante (requiere duplicar) pero más preciso.
+
+---
+
+## BLOQUE P — ML No Supervisado
+*¿Es esta txn estadísticamente anómala respecto a todas las demás?*
+
+> Estas variables las genera `ml/clustering_fraude.py` (paso opcional del pipeline).
+> No requieren etiqueta F/N para funcionar — detectan patrones sin necesitar datos de fraude previo.
+
+---
+
+### `ANOMALY_SCORE`
+- **Qué es:** Puntaje de anomalía asignado por Isolation Forest, en escala 0 a 1
+- **Fórmula:** El modelo construye árboles de decisión aleatorios. Las transacciones que se "aíslan" rápido (en pocas divisiones) son más anómalas. El score se normaliza a [0, 1].
+- **Ejemplo:** `ANOMALY_SCORE = 0.92` → esta txn está en el 8% más anómalo de todo el dataset
+- **Interpretar:**
+  - `> 0.8` → anomalía alta. Candidata a revisión aunque no esté marcada como fraude todavía.
+  - `0.5–0.8` → zona gris. Inusual pero no extrema.
+  - `< 0.5` → transacción típica del comercio.
+- **Ventaja clave:** No depende de la etiqueta F — puede detectar fraude nuevo que el analista aún no revisó. Un fraude que acaba de ocurrir y está en N puede tener `ANOMALY_SCORE = 0.95`.
+- **Ver en:** Hoja `IF_Anomalias` del Excel ML (`ml/output/ml_resumen_{COMERCIO}.xlsx`).
+
+---
+
+### `FLAG_ANOMALIA_IF`
+- **Qué es:** Flag binario si el Isolation Forest clasificó la txn como anomalía
+- **Valores:** `1` = anomalía | `0` = normal
+- **Parámetro:** Controlado por `CONTAMINATION_IF = 0.05` en el script → aproximadamente el 5% de las txn serán marcadas como anomalía.
+- **Ejemplo:** Con 4,453 txn totales → ~223 marcadas como anomalías.
+- **Interpretar:** Si el porcentaje de fraudes (F) entre las anomalías es significativamente mayor que la tasa global, el modelo discrimina bien. Si la tasa de F en anomalías = 40% y la global = 6%, el modelo es 6.7x más preciso que el azar.
+- **Ajuste:** Si hay muchos falsos positivos, subir `CONTAMINATION_IF` a 0.03. Si se pierden fraudes reales, bajar a 0.08.
+
+---
+
+### `CLUSTER_HDBSCAN`
+- **Qué es:** Número de cluster asignado por HDBSCAN. `-1` indica ruido (outlier)
+- **Valores:** `0`, `1`, `2`... (clusters) o `-1` (no pertenece a ningún cluster)
+- **Ejemplo:** `CLUSTER_HDBSCAN = 2` → esta txn pertenece al cluster 2. `CLUSTER_HDBSCAN = -1` → transacción outlier, no encaja en ningún patrón.
+- **Interpretar:**
+  - **Cluster con alta TASA_F%:** El grupo de transacciones más concentrado en fraude. Revisar qué variables caracterizan ese cluster (ver hoja `HDBSCAN_Clusters`).
+  - **Cluster -1 (ruido):** Transacciones que no encajan en ningún patrón → pueden ser fraudes muy específicos o errores de datos. Revisar manualmente.
+  - Si todos los fraudes caen en cluster = -1, significa que no forman un patrón repetible — son fraudes muy diversos.
+- **Diferencia con Isolation Forest:** IF busca anomalías individuales. HDBSCAN busca grupos de comportamiento similar. Ambos son complementarios: IF detecta lo raro, HDBSCAN agrupa lo similar.
+- **Ver en:** Hoja `HDBSCAN_Clusters` del Excel ML.
 
 ---
 

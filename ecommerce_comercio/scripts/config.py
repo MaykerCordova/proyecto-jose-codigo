@@ -15,8 +15,27 @@
 
 from pathlib import Path
 
-# ─── NOMBRE DEL COMERCIO ─────────────────────────────────────────────────────
+# ─── NOMBRE / ETIQUETA DEL ANÁLISIS ──────────────────────────────────────────
 COMERCIO_NOMBRE = "COMERCIO_EJEMPLO"   # Ej: "SAGAFALABELLA", "AMAZON", "ZARA"
+                                       # Para análisis LIKE: poner el patrón buscado, ej: "ZARA_LIKE"
+
+# =============================================================================
+#  MODO DE ANÁLISIS
+#  Cambia este valor según qué tipo de análisis estás haciendo.
+#
+#  "COMERCIO"  → Un solo comercio exacto          (ej: "ZARA")
+#  "MULTI"     → Varios comercios bajados con LIKE (ej: "AIRBNB%", "ZARA%")
+#                Hoja 0 mostrará el ranking de comercios por fraude
+#  "MCC"       → Análisis por código MCC           (ej: MCC 5411 = Supermercados)
+#                Hoja 0 mostrará el ranking de MCC y comercios dentro del MCC
+#  "BIN"       → Análisis centrado en BIN          (ej: investigar un BIN específico)
+#                Hoja 0 mostrará el ranking de BINs con clientes + monto
+#  "SEGMENTO"  → Análisis por segmento de cliente  (ej: comportamiento por Mass/Affluent)
+#                Hoja 0 mostrará el ranking de segmentos
+#  "PAIS"      → Análisis por país de origen       (ej: fraude transnacional)
+#                Hoja 0 mostrará el ranking de países
+# =============================================================================
+MODO_ANALISIS = "COMERCIO"
 
 # ─── RUTAS ───────────────────────────────────────────────────────────────────
 BASE_DIR            = Path(__file__).resolve().parent.parent
