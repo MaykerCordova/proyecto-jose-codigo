@@ -150,6 +150,12 @@ if nulos_c > 0:
 else:
     print(f"  DATETIME_CIERRE OK ✅")
 
+# Quitar timezone si alguna columna la trae (tz-aware vs tz-naive causa error en bloque C)
+if df["DATETIME_TRX"].dt.tz is not None:
+    df["DATETIME_TRX"] = df["DATETIME_TRX"].dt.tz_convert("UTC").dt.tz_localize(None)
+if df["DATETIME_CIERRE"].dt.tz is not None:
+    df["DATETIME_CIERRE"] = df["DATETIME_CIERRE"].dt.tz_convert("UTC").dt.tz_localize(None)
+
 df = df.sort_values("DATETIME_TRX").reset_index(drop=True)
 
 
