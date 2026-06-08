@@ -10,24 +10,24 @@ echo.
 
 cd /d "%~dp0"
 
-echo [1/3] EDA Fraude vs No Fraude...
+echo [1/4] EDA Fraude vs No Fraude...
 python scripts\eda_fraude.py
 if %errorlevel% neq 0 ( echo ERROR en eda_fraude.py & pause & exit /b 1 )
 
 echo.
-echo [2/3] ML Scoring (Regresion Logistica / XGBoost)...
+echo [2/4] ML Scoring (Regresion Logistica)...
 python scripts\ml_scoring.py
 if %errorlevel% neq 0 ( echo ERROR en ml_scoring.py & pause & exit /b 1 )
 
 echo.
-echo [3/3] Analisis de Reglas para Monitor...
+echo [3/4] Analisis de Reglas para Monitor (simples + combinadas)...
 python scripts\reglas_monitor.py
 if %errorlevel% neq 0 ( echo ERROR en reglas_monitor.py & pause & exit /b 1 )
 
 echo.
-echo [4/4] Generando documento Word de sustento...
-python scripts\generar_sustento.py
-if %errorlevel% neq 0 ( echo ERROR en generar_sustento.py ^(verifica: pip install python-docx^) & pause & exit /b 1 )
+echo [4/4] Generando informe HTML (sin instalacion de paquetes extra)...
+python scripts\generar_informe_html.py
+if %errorlevel% neq 0 ( echo ERROR en generar_informe_html.py & pause & exit /b 1 )
 
 echo.
 echo ============================================================

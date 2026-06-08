@@ -131,6 +131,7 @@ print("ANÁLISIS POR REGLA")
 print("─" * 65)
 
 resultados = []
+resultados_combinadas = []
 
 # ── REGLA 1: Velocidad extrema ───────────────────────────────────────────────
 cond_r1 = pd.Series(False, index=df.index)
@@ -197,6 +198,106 @@ r5 = aplicar_regla(
     "FLAG_RAFAGA_5MIN = 1 → ALERTAR/DECLINAR"
 )
 resultados.append(r5)
+
+
+# ─────────────────────────────────────────────────────────────────────────────
+# REGLAS COMBINADAS (mayor precisión, menor afectación al legítimo)
+# Combinar condiciones del modelo reduce los FP significativamente
+# ─────────────────────────────────────────────────────────────────────────────
+print("\n" + "─" * 65)
+print("REGLAS COMBINADAS (segmentadas)")
+print("─" * 65)
+
+# ── COMBINADA A: Ráfaga 5min + Sin autenticación 3DS ────────────────────────
+cond_ca = pd.Series(False, index=df.index)
+if "FLAG_RAFAGA_5MIN" in df.columns and "ES_SEGURO" in df.columns:
+    cond_ca = (df["FLAG_RAFAGA_5MIN"] == 1) & (df["ES_SEGURO"] == 0)
+
+ra = aplicar_regla(
+    df, "COMB-A — Ráfaga + Sin 3DS",
+    cond_ca,
+    "3+ txn en 5 min Y transacción NO autenticada con 3DS",
+    "FLAG_RAFAGA_5MIN = 1 AND ECI NOT IN ('05','02') → DECLINAR"
+)
+resultados_combinadas.append(ra)
+
+# ── COMBINADA B: Velocidad + MCC alto riesgo ────────────────────────────────
+cond_cb = pd.Series(False, index=df.index)
+if "TRX_TARJETA_24H" in df.columns and "GAP_MINUTOS" in df.columns and col_mcc in df.columns:
+    mcc_str = df[col_mcc].astype(str).str.strip()
+    cond_cb = (
+        (df["TRX_TARJETA_24H"] >= 5) &
+        (df["GAP_MINUTOS"] <= 10) &
+        mcc_str.isin(MCC_ALTO_RIESGO_REGLA)
+    )
+
+rb = aplicar_regla(
+    df, "COMB-B — Velocidad Extrema + MCC Riesgo",
+    cond_cb,
+    "5+ txn en 24h Y GAP <= 10min Y MCC en lista de alto riesgo",
+    "TRX_TARJETA_24H >= 5 AND GAP_MINUTOS <= 10 AND MCC IN (5411,4829,4722,4121) → DECLINAR"
+)
+resultados_combinadas.append(rb)
+
+# ── COMBINADA C: Ráfaga + MCC alto riesgo ───────────────────────────────────
+cond_cc = pd.Series(False, index=df.index)
+if "FLAG_RAFAGA_5MIN" in df.columns and col_mcc in df.columns:
+    mcc_str = df[col_mcc].astype(str).str.strip()
+    cond_cc = (df["FLAG_RAFAGA_5MIN"] == 1) & mcc_str.isin(MCC_ALTO_RIESGO_REGLA)
+
+rc = aplicar_regla(
+    df, "COMB-C — Ráfaga + MCC Riesgo",
+    cond_cc,
+    "3+ txn en 5 min Y comercio de alto riesgo",
+    "FLAG_RAFAGA_5MIN = 1 AND MCC IN (5411,4829,4722,4121) → DECLINAR"
+)
+resultados_combinadas.append(rc)
+
+# ── COMBINADA D: Ecommerce + Sin 3DS + Velocidad ────────────────────────────
+cond_cd = pd.Series(False, index=df.index)
+if "FLAG_ECOMMERCE" in df.columns and "ES_SEGURO" in df.columns and "TRX_TARJETA_24H" in df.columns:
+    cond_cd = (
+        (df["FLAG_ECOMMERCE"] == 1) &
+        (df["ES_SEGURO"] == 0) &
+        (df["TRX_TARJETA_24H"] >= 3)
+    )
+
+rd = aplicar_regla(
+    df, "COMB-D — Ecommerce + Sin 3DS + Velocidad",
+    cond_cd,
+    "Ecommerce Y sin autenticación 3DS Y 3+ txn en 24h",
+    "FLAG_ECOMMERCE = 1 AND ECI NOT IN ('05','02') AND TRX_TARJETA_24H >= 3 → ALERTAR"
+)
+resultados_combinadas.append(rd)
+
+# ── COMBINADA E: MCC + Velocidad + Monto ────────────────────────────────────
+cond_ce = pd.Series(False, index=df.index)
+if col_mcc in df.columns and "TRX_TARJETA_24H" in df.columns:
+    mcc_str = df[col_mcc].astype(str).str.strip()
+    cond_ce = (
+        mcc_str.isin(MCC_ALTO_RIESGO_REGLA) &
+        (df["TRX_TARJETA_24H"] >= 3) &
+        (df[col_mto] >= 30)
+    )
+
+re = aplicar_regla(
+    df, "COMB-E — MCC + Velocidad >= 3 + Monto >= 30",
+    cond_ce,
+    "MCC de riesgo Y 3+ txn en 24h Y monto >= S/30",
+    "MCC IN (5411,4829,4722,4121) AND TRX_TARJETA_24H >= 3 AND MONTO >= 30 → ALERTAR"
+)
+resultados_combinadas.append(re)
+
+# Tabla comparativa de precision
+print("\n  COMPARATIVA REGLAS SIMPLES vs COMBINADAS:")
+print(f"  {'Regla':<40} {'Fraudes':>8} {'Legítimas':>10} {'Precision':>10} {'Recall':>8}")
+print(f"  {'─'*76}")
+for r in resultados + resultados_combinadas:
+    n = r['N_Fraudes_Capturados']
+    l = r['N_Legitimas_Afectadas']
+    p = r['Precision_%']
+    rc_ = r['Recall_%']
+    print(f"  {r['Regla']:<40} {n:>8,} {l:>10,} {p:>9.1f}% {rc_:>7.1f}%")
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -341,12 +442,18 @@ df_resumen = pd.DataFrame([
     for r in resultados
 ])
 
+df_combinadas = pd.DataFrame([
+    {k: v for k, v in r.items() if k != "Marcada"}
+    for r in resultados_combinadas
+])
+
 OUTPUT_REGLAS.parent.mkdir(exist_ok=True)
 try:
     with pd.ExcelWriter(OUTPUT_REGLAS, engine="openpyxl") as writer:
-        df_resumen.to_excel(writer,     sheet_name="Resumen_Reglas",   index=False)
-        df_cascada.to_excel(writer,     sheet_name="Cascada_Acumulada",index=False)
-        df_diccionario.to_excel(writer, sheet_name="Diccionario_Variables", index=False)
+        df_resumen.to_excel(writer,     sheet_name="Resumen_Reglas",      index=False)
+        df_combinadas.to_excel(writer,  sheet_name="Reglas_Combinadas",   index=False)
+        df_cascada.to_excel(writer,     sheet_name="Cascada_Acumulada",   index=False)
+        df_diccionario.to_excel(writer, sheet_name="Diccionario_Variables",index=False)
 
     print(f"  ✅  Excel guardado: {OUTPUT_REGLAS}")
 except Exception as e:
