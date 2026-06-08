@@ -204,6 +204,22 @@ O doble clic en `2_abrir_app.bat`.
 | `FLAG_ANOMALIA_IF` | 1 si Isolation Forest lo clasifica como anomalía (~5% del total) |
 | `CLUSTER_HDBSCAN` | Cluster asignado por HDBSCAN (-1 = ruido/outlier) |
 
+### Bloque Q — Velocidad por BIN
+
+| Variable | Descripción |
+|---|---|
+| `TRX_BIN_1H` | Txn del mismo BIN en la última hora (ventana deslizante) |
+| `TRX_BIN_24H` | Txn del mismo BIN en las últimas 24h |
+| `MNT_BIN_1H` | Monto acumulado del BIN en la última hora |
+| `MNT_BIN_24H` | Monto acumulado del BIN en las últimas 24h |
+| `CLIENTES_BIN_DIA` | Clientes distintos que usaron ese BIN en el día |
+| `FLAG_RAFAGA_BIN_1H` | 1 si TRX_BIN_1H ≥ `bin_trx_1h` (default 10) |
+| `FLAG_MONTO_BIN_ALTO_24H` | 1 si MNT_BIN_24H ≥ `bin_monto_24h` (default S/5,000) |
+| `FLAG_CLIENTES_BIN_ALTO` | 1 si CLIENTES_BIN_DIA ≥ `bin_clientes_dia` (default 5) |
+
+> Umbrales configurables en `config.py` → `UMBRALES_REGLA["bin_*"]`
+> Para retail de alto volumen subir `bin_trx_1h` a 30–50.
+
 ---
 
 ## Hojas del Excel generado por analisis.py (22 hojas)

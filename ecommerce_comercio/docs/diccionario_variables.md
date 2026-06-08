@@ -792,6 +792,80 @@ Estos flags se generan automáticamente desde los umbrales en `config.py → UMB
 
 ---
 
+## BLOQUE Q — Velocidad por BIN
+*¿El BIN de esta tarjeta está siendo explotado masivamente en este momento?*
+
+> Estas variables miden el comportamiento AGREGADO del BIN, no del cliente individual.
+> Un BIN puede parecer normal a nivel cliente pero revelar un ataque cuando lo ves en conjunto.
+> Son la base para construir reglas de BIN en Power BI con thresholds dinámicos.
+
+---
+
+### `TRX_BIN_1H`
+- **Qué es:** Número de transacciones del mismo BIN en la última hora, anteriores a esta txn
+- **Fórmula:** Ventana deslizante rolling de 3600 segundos hacia atrás, agrupada por `ACF-BIN`
+- **Ejemplo:** `TRX_BIN_1H = 18` → en la última hora, ese BIN generó 18 txn antes de esta
+- **Interpretar:** Un BIN con 18 txn/hora en un comercio donde el promedio es 2 txn/hora = ataque. Ajusta el umbral (`bin_trx_1h` en config.py) según el volumen del comercio.
+- **Combinar con:** `CLIENTES_BIN_DIA` — si son clientes distintos, es ataque de múltiples tarjetas del mismo BIN.
+
+---
+
+### `TRX_BIN_24H`
+- **Qué es:** Número de transacciones del mismo BIN en las últimas 24h
+- **Fórmula:** Igual que TRX_BIN_1H pero con ventana de 86400 segundos
+- **Ejemplo:** `TRX_BIN_24H = 45` → ese BIN tuvo 45 txn en el día antes de esta
+- **Interpretar:** Útil para ver el volumen total del día. Comparar con el patrón histórico del BIN.
+
+---
+
+### `MNT_BIN_1H`
+- **Qué es:** Monto acumulado en S/ del BIN en la última hora
+- **Ejemplo:** `MNT_BIN_1H = 3,200` → ese BIN acumuló S/3,200 en la última hora
+- **Interpretar:** Un BIN que normalmente mueve S/500/hora y de repente acumula S/8,000 = señal clara de ataque.
+
+---
+
+### `MNT_BIN_24H`
+- **Qué es:** Monto acumulado en S/ del BIN en las últimas 24h
+- **Ejemplo:** `MNT_BIN_24H = 12,500`
+- **Combinar con:** `FLAG_MONTO_BIN_ALTO_24H` — si supera el umbral configurado, disparar alerta.
+
+---
+
+### `CLIENTES_BIN_DIA`
+- **Qué es:** Número de clientes distintos que usaron ese BIN en el mismo día calendario
+- **Fórmula:** `nunique(id_cliente)` agrupado por `[BIN, FECHA_DIA]`
+- **Ejemplo:** `CLIENTES_BIN_DIA = 12` → 12 tarjetas distintas del mismo BIN transaccionaron hoy
+- **Interpretar:**
+  - 1–3 clientes: normal (BIN compartido entre pocos usuarios)
+  - 5–10 clientes: inusual, revisar
+  - >10 clientes: ataque de BIN confirmado — múltiples tarjetas generadas del mismo BIN
+- **Nota técnica:** Es agregado diario (no ventana deslizante) por eficiencia. Suficiente para detección de ataques sostenidos en el día.
+
+---
+
+### `FLAG_RAFAGA_BIN_1H`
+- **Qué es:** 1 si `TRX_BIN_1H >= bin_trx_1h` (umbral en config.py, default 10)
+- **Ejemplo:** Con umbral=10 → cualquier BIN con ≥10 txn en la última hora activa el flag
+- **Regla práctica:** "Si este BIN tuvo ≥10 txn en la última hora → derivar a revisión manual"
+- **Ajuste:** Si el comercio es de alto volumen (Saga, Ripley), subir el umbral a 30 o 50.
+
+---
+
+### `FLAG_MONTO_BIN_ALTO_24H`
+- **Qué es:** 1 si `MNT_BIN_24H >= bin_monto_24h` (umbral en config.py, default S/5,000)
+- **Ejemplo:** Con umbral=5000 → BIN que acumuló más de S/5,000 en el día activa el flag
+- **Usar para:** Regla de declive por exposición total del BIN en el día.
+
+---
+
+### `FLAG_CLIENTES_BIN_ALTO`
+- **Qué es:** 1 si `CLIENTES_BIN_DIA >= bin_clientes_dia` (umbral en config.py, default 5)
+- **Ejemplo:** Con umbral=5 → si ese BIN ya tuvo 5+ clientes distintos hoy, marcar
+- **Señal más fuerte:** Esta variable por sí sola indica generación masiva de tarjetas de un mismo BIN.
+
+---
+
 ## CÓMO INTERPRETAR EL ANÁLISIS COMPLETO PARA ESCRIBIR UNA REGLA
 
 ### Ejemplo de flujo de análisis:

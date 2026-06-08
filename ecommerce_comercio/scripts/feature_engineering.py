@@ -21,6 +21,7 @@ Bloques:
   M  Score diferenciado por marca  → SCORE_MON_NORM, FLAG_SCORE_RIESGO_MON_ALTO (solo TC)
   N  Vínculos de cliente           → reincidencia de fraude, zscore cliente×comercio
   O  Perfil horario del comercio   → hora típica, FLAG_HORA_FUERA_PERFIL_COMERCIO
+  Q  Velocidad por BIN             → TRX/MNT_BIN_1H/24H, CLIENTES_BIN_DIA, flags de ataque
 """
 
 import sys
@@ -827,6 +828,87 @@ else:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  BLOQUE Q — VELOCIDAD POR BIN
+#  Para cada txn: cuántas txn, cuánto monto y cuántos clientes distintos
+#  tuvo ese BIN en las últimas 1h y 24h ANTERIORES a esa transacción.
+#
+#  Detecta ataques concentrados en un BIN:
+#    - Muchas txn del mismo BIN en poco tiempo → TRX_BIN_1H alto
+#    - Monto acumulado del BIN explotado en el día → MNT_BIN_24H alto
+#    - Muchos clientes distintos usando el mismo BIN → CLIENTES_BIN_DIA alto
+#
+#  Umbrales configurables en config.py → UMBRALES_REGLA["bin_*"]
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n[Q] Velocidad por BIN...")
+
+col_bin = C.get("bin", "")
+if col_bin and col_bin in df.columns:
+    df = df.sort_values([col_bin, col_fh]).reset_index(drop=True)
+    df["_ts_q"] = df[col_fh].astype(np.int64) // 10**9
+
+    VENTANAS_BIN = {
+        "TRX_BIN_1H" : (3600,  "count"),
+        "TRX_BIN_24H": (86400, "count"),
+        "MNT_BIN_1H" : (3600,  "sum"),
+        "MNT_BIN_24H": (86400, "sum"),
+    }
+
+    res_bin = {col: np.zeros(len(df)) for col in VENTANAS_BIN}
+    for _bin_val, _grupo in df.groupby(col_bin, sort=False):
+        _idx = _grupo.index.values
+        _ts  = _grupo["_ts_q"].values
+        _amt = _grupo[col_monto].fillna(0).values
+        _n   = len(_ts)
+        for col, (segs, modo) in VENTANAS_BIN.items():
+            vals = np.zeros(_n)
+            for i in range(_n):
+                j = np.searchsorted(_ts, _ts[i] - segs, side="left")
+                vals[i] = (i - j) if modo == "count" else _amt[j:i].sum()
+            res_bin[col][_idx] = vals
+
+    for col, vals in res_bin.items():
+        df[col] = vals
+        df[col] = df[col].round(2) if col.startswith("MNT_") else df[col].astype(int)
+
+    # Clientes únicos del BIN por día (agrupado diario — eficiente y suficiente)
+    _cli_bin_dia = (
+        df.groupby([col_bin, "FECHA_DIA"])[col_cli]
+        .nunique().reset_index()
+        .rename(columns={col_cli: "CLIENTES_BIN_DIA"})
+    )
+    df = df.merge(_cli_bin_dia, on=[col_bin, "FECHA_DIA"], how="left")
+    df["CLIENTES_BIN_DIA"] = df["CLIENTES_BIN_DIA"].fillna(0).astype(int)
+
+    df.drop(columns=["_ts_q"], inplace=True)
+
+    # Flags de alerta — umbrales desde config.py
+    _umb_trx = UMBRALES_REGLA.get("bin_trx_1h",    10)
+    _umb_mnt = UMBRALES_REGLA.get("bin_monto_24h", 5000)
+    _umb_cli = UMBRALES_REGLA.get("bin_clientes_dia", 5)
+
+    df["FLAG_RAFAGA_BIN_1H"]      = (df["TRX_BIN_1H"]      >= _umb_trx).astype(int)
+    df["FLAG_MONTO_BIN_ALTO_24H"] = (df["MNT_BIN_24H"]      >= _umb_mnt).astype(int)
+    df["FLAG_CLIENTES_BIN_ALTO"]  = (df["CLIENTES_BIN_DIA"] >= _umb_cli).astype(int)
+
+    print(f"  TRX_BIN_1H    máx : {int(df['TRX_BIN_1H'].max())}")
+    print(f"  MNT_BIN_24H   máx : {df['MNT_BIN_24H'].max():,.2f}")
+    print(f"  CLIENTES_BIN_DIA  máx : {int(df['CLIENTES_BIN_DIA'].max())}")
+    print(f"  FLAG_RAFAGA_BIN_1H     : {df['FLAG_RAFAGA_BIN_1H'].sum():,} txn")
+    print(f"  FLAG_MONTO_BIN_ALTO_24H: {df['FLAG_MONTO_BIN_ALTO_24H'].sum():,} txn")
+    print(f"  FLAG_CLIENTES_BIN_ALTO : {df['FLAG_CLIENTES_BIN_ALTO'].sum():,} txn")
+else:
+    df["TRX_BIN_1H"]              = 0
+    df["TRX_BIN_24H"]             = 0
+    df["MNT_BIN_1H"]              = 0.0
+    df["MNT_BIN_24H"]             = 0.0
+    df["CLIENTES_BIN_DIA"]        = 0
+    df["FLAG_RAFAGA_BIN_1H"]      = 0
+    df["FLAG_MONTO_BIN_ALTO_24H"] = 0
+    df["FLAG_CLIENTES_BIN_ALTO"]  = 0
+    print(f"  '{col_bin or 'bin'}' no disponible — Bloque Q omitido")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  BLOQUE K — FLAGS DE REGLAS CONFIGURABLES
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[K] Flags de reglas configurables...")
@@ -936,6 +1018,9 @@ VARS_GENERADAS = [
     # ── O: Perfil horario del comercio ───────────────────────────────────────
     "HORA_PROM_COMERCIO","HORA_STD_COMERCIO","FLAG_HORA_FUERA_PERFIL_COMERCIO",
     "TRX_PROM_CLIENTE_DIA_COMERCIO","FLAG_CLIENTE_SUPERA_PERFIL_COMERCIO",
+    # ── Q: Velocidad por BIN ─────────────────────────────────────────────────
+    "TRX_BIN_1H","TRX_BIN_24H","MNT_BIN_1H","MNT_BIN_24H","CLIENTES_BIN_DIA",
+    "FLAG_RAFAGA_BIN_1H","FLAG_MONTO_BIN_ALTO_24H","FLAG_CLIENTES_BIN_ALTO",
 ]
 
 print("\n" + "─" * 65)

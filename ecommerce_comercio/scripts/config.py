@@ -145,6 +145,14 @@ UMBRALES_REGLA = {
     "trx_en_5min"    : [2, 3, 4, 5],             # número de txn en 5 min
     "trx_en_10min"   : [3, 4, 5],
     "trx_en_1h"      : [5, 7, 10],
+
+    # ── Umbrales de velocidad por BIN (Bloque Q) ─────────────────────────────
+    # Ajusta según el volumen normal del comercio que estás analizando.
+    # Un BIN de retail grande puede tener 50 txn/hora sin ser fraude;
+    # un BIN de montos altos con 5 txn/hora en clientes distintos ya es sospechoso.
+    "bin_trx_1h"       : 10,    # FLAG_RAFAGA_BIN_1H: ≥ N txn del mismo BIN en 1h
+    "bin_monto_24h"    : 5000,  # FLAG_MONTO_BIN_ALTO_24H: ≥ S/ acumulado del BIN en 24h
+    "bin_clientes_dia" : 5,     # FLAG_CLIENTES_BIN_ALTO: ≥ N clientes distintos del BIN en el día
 }
 
 # =============================================================================
