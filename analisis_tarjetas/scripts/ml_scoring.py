@@ -228,8 +228,9 @@ FEATURES = [f for f in [
     "FLAG_MONTO_ALTO_CLI_COMERCIO",
     "FLAG_CLI_OUTLIER_TICKET_COMERCIO",
     "FLAG_HORA_FUERA_PERFIL_COMERCIO",
-    # Score compuesto del pipeline
-    "SCORE_RIESGO",
+    # SCORE_RIESGO excluido: es suma de flags individuales que YA están en el modelo
+    # → genera multicolinealidad severa (OR=44.74 inflado) y distorsiona coeficientes
+    # → se mantiene como variable de negocio en reglas_monitor.py (útil ahí)
 ] if f in df_model.columns]
 
 print(f"\n  Features limpias       : {len(FEATURES)}")
