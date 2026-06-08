@@ -407,24 +407,42 @@ def categorizar_canal(canal):
 df["CANAL_DIGITAL_GRUPO"] = df[C["canal_digital"]].map(categorizar_canal)
 df["FLAG_CANAL_EXTERNO"]  = (df["CANAL_DIGITAL_GRUPO"] == "TRANSF_INMEDIATA").astype(int)
 
+# ── Umbrales de rango de monto (ajusta aquí si cambian los criterios) ─────────
+RANGO_UMBRALES = [
+    (0,      100,    "1_MICRO",    "S/ 0 – S/ 100"),
+    (100,    500,    "2_BAJO",     "S/ 101 – S/ 500"),
+    (500,    2000,   "3_MEDIO",    "S/ 501 – S/ 2,000"),
+    (2000,   10000,  "4_ALTO",     "S/ 2,001 – S/ 10,000"),
+    (10000,  np.inf, "5_MUY_ALTO", "S/ 10,001 a más"),
+]
+
+def clasificar_monto(m):
+    """Devuelve (etiqueta, texto_rango) para un monto dado."""
+    if pd.isna(m) or m < 0:
+        return ("SIN_DATO", "Sin dato")
+    for desde, hasta, etiqueta, texto in RANGO_UMBRALES:
+        if desde < hasta:           # rango normal
+            if desde <= m < hasta:
+                return (etiqueta, texto)
+        else:                       # último rango (hasta = inf)
+            if m >= desde:
+                return (etiqueta, texto)
+    return ("5_MUY_ALTO", "S/ 10,001 a más")
+
+_rangos = df[C["monto"]].map(clasificar_monto)
+df["RANGO_MONTO"]       = _rangos.map(lambda x: x[0])   # etiqueta ordenable: 1_MICRO, 2_BAJO…
+df["RANGO_MONTO_TEXTO"] = _rangos.map(lambda x: x[1])   # texto legible: "S/ 0 – S/ 100"
+
 # Señales de monto
 df["FLAG_MONTO_REDONDO"] = (df[C["monto"]] % 1 == 0).astype(int)
-
-q25, q50, q75 = df[C["monto"]].quantile([0.25, 0.50, 0.75])
-def rango_monto(m):
-    if   m <= q25: return "BAJO"
-    elif m <= q50: return "MEDIO_BAJO"
-    elif m <= q75: return "MEDIO_ALTO"
-    else:          return "ALTO"
-df["RANGO_MONTO"] = df[C["monto"]].map(rango_monto)
 
 if C["monto_dolar"] in df.columns:
     df["TIPO_CAMBIO_IMPLICITO"] = (
         df[C["monto"]] / df[C["monto_dolar"]].replace(0, np.nan)
     ).round(4)
 
-print(f"  Cuartiles monto: Q25={q25:.2f} | Q50={q50:.2f} | Q75={q75:.2f}")
 print(f"  Montos redondos : {df['FLAG_MONTO_REDONDO'].sum():,} ({df['FLAG_MONTO_REDONDO'].mean()*100:.1f}%)")
+print(f"  Distribución RANGO_MONTO:\n{df['RANGO_MONTO'].value_counts().sort_index().to_string()}")
 print(f"  Distribución TIPO_OPERACION_GRUPO:\n{df['TIPO_OPERACION_GRUPO'].value_counts().to_string()}")
 print(f"  Distribución CANAL_DIGITAL_GRUPO:\n{df['CANAL_DIGITAL_GRUPO'].value_counts().to_string()}")
 
@@ -527,7 +545,7 @@ VARS_NUEVAS = [
     "TIPO_OPERACION_GRUPO", "CANAL_DIGITAL_GRUPO",
     "FLAG_ES_YAPE_PLIN_QR", "FLAG_ES_PASARELA", "FLAG_ES_TRANSFERENCIA", "FLAG_ES_PAGO",
     "FLAG_CANAL_EXTERNO",
-    "FLAG_MONTO_REDONDO", "RANGO_MONTO", "TIPO_CAMBIO_IMPLICITO",
+    "FLAG_MONTO_REDONDO", "RANGO_MONTO", "RANGO_MONTO_TEXTO", "TIPO_CAMBIO_IMPLICITO",
     # G — autenticación / dispositivo
     "FLAG_SIN_AUTENTICADOR", "FLAG_OTP", "FLAG_BIOMETRICO", "FLAG_CLAVE_DIGITAL",
     "TIPO_DISPOSITIVO", "FLAG_WEB", "FLAG_IP_REAL",

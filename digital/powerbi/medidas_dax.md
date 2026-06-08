@@ -162,6 +162,41 @@ DIVIDE(
 
 ---
 
+## Rango de monto
+
+> `RANGO_MONTO` viene ordenado alfabéticamente (1_MICRO, 2_BAJO…) para que Power BI lo muestre en orden correcto.
+> `RANGO_MONTO_TEXTO` es la etiqueta legible para mostrar en gráficos y tablas.
+
+```dax
+Fraudes MICRO =
+CALCULATE([Total Fraudes], 'MF_digital_features'[RANGO_MONTO] = "1_MICRO")
+
+Fraudes BAJO =
+CALCULATE([Total Fraudes], 'MF_digital_features'[RANGO_MONTO] = "2_BAJO")
+
+Fraudes MEDIO =
+CALCULATE([Total Fraudes], 'MF_digital_features'[RANGO_MONTO] = "3_MEDIO")
+
+Fraudes ALTO =
+CALCULATE([Total Fraudes], 'MF_digital_features'[RANGO_MONTO] = "4_ALTO")
+
+Fraudes MUY ALTO =
+CALCULATE([Total Fraudes], 'MF_digital_features'[RANGO_MONTO] = "5_MUY_ALTO")
+
+% por Rango Monto =
+DIVIDE(
+    COUNTROWS('MF_digital_features'),
+    CALCULATE(COUNTROWS('MF_digital_features'), ALL('MF_digital_features'[RANGO_MONTO]))
+)
+
+Monto Total por Rango =
+SUM('MF_digital_features'[POS1_ACF-MONTO EN MONEDA LOCAL])
+```
+
+> **Tip Power BI:** en la columna `RANGO_MONTO_TEXTO` usa "Ordenar por columna" → `RANGO_MONTO` para que los gráficos salgan en orden MICRO → MUY_ALTO.
+
+---
+
 ## Slicers recomendados
 
 | Campo | Tipo |
