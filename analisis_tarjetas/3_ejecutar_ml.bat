@@ -1,6 +1,6 @@
 @echo off
 echo ============================================================
-echo  ML SCORING + EDA — TARJETAS COMPROMETIDAS N7 DEBITO
+echo  ML SCORING + SEGMENTACION — TARJETAS COMPROMETIDAS N7
 echo  Scotiabank Peru - Prevencion de Fraude
 echo ============================================================
 echo.
@@ -25,7 +25,12 @@ python scripts\reglas_monitor.py
 if %errorlevel% neq 0 ( echo ERROR en reglas_monitor.py & pause & exit /b 1 )
 
 echo.
-echo [4/4] Generando informe HTML (sin instalacion de paquetes extra)...
+echo [4/5] Analisis de Segmentacion (Segmento x Senal / BIN x Senal / MCC x Senal)...
+python scripts\analisis_segmentacion.py
+if %errorlevel% neq 0 ( echo ERROR en analisis_segmentacion.py & pause & exit /b 1 )
+
+echo.
+echo [5/5] Generando informe HTML (sin instalacion de paquetes extra)...
 python scripts\generar_informe_html.py
 if %errorlevel% neq 0 ( echo ERROR en generar_informe_html.py & pause & exit /b 1 )
 
