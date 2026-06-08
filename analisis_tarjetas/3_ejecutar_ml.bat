@@ -25,6 +25,11 @@ python scripts\reglas_monitor.py
 if %errorlevel% neq 0 ( echo ERROR en reglas_monitor.py & pause & exit /b 1 )
 
 echo.
+echo [4/4] Generando documento Word de sustento...
+python scripts\generar_sustento.py
+if %errorlevel% neq 0 ( echo ERROR en generar_sustento.py ^(verifica: pip install python-docx^) & pause & exit /b 1 )
+
+echo.
 echo ============================================================
 echo  COMPLETADO - Abriendo carpeta output...
 echo ============================================================
