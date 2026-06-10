@@ -6,25 +6,37 @@
 ║  Basado en la arquitectura de Bitácora Analytics V8:             ║
 ║                                                                  ║
 ║  • ConversationID de Outlook como llave primaria.                ║
-║    El que responde lo hace sobre el correo original, así que     ║
+║    El analista responde sobre el correo original, así que        ║
 ║    solicitud y respuesta comparten el mismo ConversationID.      ║
 ║  • SQLite es la fuente de verdad; el Excel se regenera desde     ║
 ║    SQLite en cada corrida (nunca al revés).                      ║
 ║  • Correos de solicitud y de respuesta se guardan como .msg      ║
 ║    para auditoría (columnas Sustento y Sustento_Respuesta).      ║
 ║                                                                  ║
-║  DIFERENCIA CLAVE respecto a V8:                                 ║
-║  Aquí los datos NO vienen en el cuerpo del correo sino en el     ║
-║  ASUNTO, con esta estructura:                                    ║
+║  DIFERENCIAS CLAVE respecto a V8:                                ║
+║                                                                  ║
+║  1. NO hay carpetas dedicadas en Outlook. Todo vive en el        ║
+║     buzón: las solicitudes de los funcionarios llegan a la       ║
+║     BANDEJA DE ENTRADA y las respuestas de los analistas         ║
+║     salen por ELEMENTOS ENVIADOS del mismo buzón.                ║
+║                                                                  ║
+║  2. El robot reconoce las solicitudes por el ASUNTO:             ║
 ║                                                                  ║
 ║      Segmento - Tipo de Solicitud - DNI - Nombre de Cliente      ║
 ║                                                                  ║
-║  Tipos de solicitud reconocidos:                                 ║
-║      Aviso de Compra, Cliente Viajero, VCAS,                     ║
-║      Error 59, Error 63, Reporte de cuenta                       ║
+║     Tipos reconocidos: Aviso de Compra, Cliente Viajero,         ║
+║     VCAS, Error 59, Error 63, Reporte de cuenta.                 ║
+║     Los correos cuyo asunto no contiene ningún tipo se           ║
+║     ignoran (son correo normal del buzón).                       ║
 ║                                                                  ║
-║  Además se calcula el TIEMPO DE RESPUESTA (cuánto demoró el      ║
-║  área en responder) cuando llega la conformidad/respuesta.       ║
+║  3. NO se usa el estado leído/no-leído (en un buzón              ║
+║     compartido lo leen los analistas). El robot revisa los       ║
+║     correos de los últimos DIAS_VENTANA días y el                ║
+║     ConversationID ya registrado en SQLite evita duplicar.       ║
+║     El robot NUNCA marca correos como leídos.                    ║
+║                                                                  ║
+║  4. Se calcula el TIEMPO DE RESPUESTA (cuánto demoró el          ║
+║     analista en responder) cuando se detecta la respuesta.       ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -34,7 +46,7 @@ import sqlite3
 import unicodedata
 import win32com.client
 import pandas as pd
-from datetime import datetime
+from datetime import datetime, timedelta
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -55,14 +67,15 @@ CONFIG = {
     "RUTA_EXCEL_PENDIENTES": os.path.join(_BASE, "Solicitudes_Sin_Formato.xlsx"),
     "RUTA_DB_SQLITE":        os.path.join(_BASE, "Respaldo_Solicitudes.db"),
     "RUTA_BACKUP_MSG":       os.path.join(_BASE, "Correos_Respaldo"),
-    # ⚠️ AJUSTAR: nombres reales de las carpetas en Outlook
-    "FOLDER_SOLICITUDES": "Solicitudes_Clientes",
-    "FOLDER_RESPUESTAS":  "Solicitudes_Respuestas",
     # ⚠️ AJUSTAR: buzón donde llegan los correos.
     #   ""  → tu cuenta personal (la cuenta por defecto de Outlook)
     #   "Prevencion de Fraude" → nombre EXACTO del buzón compartido,
     #   tal como aparece en el panel izquierdo de Outlook.
     "BUZON": "",
+    # Cuántos días hacia atrás revisa el robot en cada corrida.
+    # Si el robot deja de correr más días que esto, subir el número
+    # temporalmente para no perder correos.
+    "DIAS_VENTANA": 7,
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -109,6 +122,13 @@ def detectar_tipo(texto: str) -> str:
 # ══════════════════════════════════════════════════════════════════
 
 class ProcesadorAsunto:
+
+    @staticmethod
+    def es_solicitud(asunto: str) -> bool:
+        """True si el asunto menciona alguno de los tipos de solicitud.
+        Es el filtro que separa las solicitudes del resto del correo
+        que llega a la bandeja de entrada."""
+        return detectar_tipo(asunto) != ""
 
     @staticmethod
     def parsear(asunto: str) -> dict:
@@ -218,6 +238,25 @@ class GestorBackupSQL:
                 (conv_id,)
             ).fetchone()[0]
         return r > 0
+
+    def existe_pendiente(self, conv_id: str) -> bool:
+        """Evita reinsertar el mismo asunto sin formato en cada corrida."""
+        with sqlite3.connect(self.ruta_db) as conn:
+            r = conn.execute(
+                "SELECT COUNT(*) FROM Solicitudes_Pendientes "
+                "WHERE ConversationID = ?",
+                (conv_id,)
+            ).fetchone()[0]
+        return r > 0
+
+    def get_estado(self, conv_id: str):
+        """'Pendiente', 'Completado' o None si no existe."""
+        with sqlite3.connect(self.ruta_db) as conn:
+            r = conn.execute(
+                "SELECT Estado FROM Solicitudes WHERE ConversationID = ?",
+                (conv_id,)
+            ).fetchone()
+        return r[0] if r else None
 
     def get_fecha_solicitud(self, conv_id: str):
         """Fecha y hora de llegada de la solicitud (para calcular demora)."""
@@ -369,8 +408,9 @@ class HerramientasOutlook:
 
     def __init__(self, buzon: str = ""):
         """buzon: nombre del buzón compartido; "" usa la cuenta por defecto."""
-        self.outlook = None
-        self.inbox   = None
+        self.outlook  = None
+        self.inbox    = None   # Bandeja de entrada (solicitudes)
+        self.enviados = None   # Elementos enviados (respuestas de analistas)
         try:
             self.outlook = (
                 win32com.client
@@ -378,21 +418,27 @@ class HerramientasOutlook:
                 .GetNamespace("MAPI")
             )
             if buzon:
-                # Bandeja de entrada del buzón compartido
-                store      = self.outlook.Folders[buzon]
-                self.inbox = self._inbox_de_store(store)
+                store         = self.outlook.Folders[buzon]
+                self.inbox    = self._subcarpeta(
+                    store, "Bandeja de entrada", "Inbox")
+                self.enviados = self._subcarpeta(
+                    store, "Elementos enviados", "Sent Items")
                 if self.inbox is None:
                     print(f"  ▲ No se encontró la Bandeja de entrada "
                           f"del buzón '{buzon}'.")
+                if self.enviados is None:
+                    print(f"  ▲ No se encontró Elementos enviados "
+                          f"del buzón '{buzon}'.")
             else:
-                self.inbox = self.outlook.GetDefaultFolder(6)
+                self.inbox    = self.outlook.GetDefaultFolder(6)
+                self.enviados = self.outlook.GetDefaultFolder(5)
         except Exception as e:
             print(f"  ▲ Error conectando a Outlook: {e}")
 
     @staticmethod
-    def _inbox_de_store(store):
-        """La bandeja de entrada puede llamarse distinto según el idioma."""
-        for nombre in ("Bandeja de entrada", "Inbox"):
+    def _subcarpeta(store, *nombres):
+        """La carpeta puede llamarse distinto según el idioma de Outlook."""
+        for nombre in nombres:
             try:
                 return store.Folders[nombre]
             except Exception:
@@ -403,11 +449,27 @@ class HerramientasOutlook:
     def conectado(self) -> bool:
         return self.outlook is not None and self.inbox is not None
 
-    def buscar_carpeta(self, nombre: str):
-        try:    return self.inbox.Folders[nombre]
-        except Exception: pass
-        try:    return self.outlook.Folders[nombre]
-        except Exception: return None
+    @staticmethod
+    def correos_desde(carpeta, fecha: datetime) -> list:
+        """Correos de la carpeta recibidos/enviados desde `fecha`,
+        ordenados del más antiguo al más reciente. NO altera nada."""
+        items = carpeta.Items
+        items.Sort("[ReceivedTime]")
+        # El filtro Restrict usa formato de fecha US: MM/DD/YYYY
+        filtro = f"[ReceivedTime] >= '{fecha.strftime('%m/%d/%Y')} 00:00'"
+        try:
+            return list(items.Restrict(filtro))
+        except Exception:
+            # Fallback: recorrer todo y filtrar en Python
+            out = []
+            for m in items:
+                try:
+                    rt = m.ReceivedTime
+                    if datetime(rt.year, rt.month, rt.day) >= fecha:
+                        out.append(m)
+                except Exception:
+                    continue
+            return out
 
     def guardar_msg(self, mail, nombre: str) -> str:
         os.makedirs(CONFIG["RUTA_BACKUP_MSG"], exist_ok=True)
@@ -434,8 +496,160 @@ def formatear_demora(inicio: datetime, fin: datetime) -> str:
     return f"{horas:02d}:{minutos:02d}"
 
 
+def a_naive(fecha_com) -> datetime:
+    """Convierte la fecha COM de Outlook a datetime naive (sin tz)."""
+    return datetime(fecha_com.year, fecha_com.month, fecha_com.day,
+                    fecha_com.hour, fecha_com.minute)
+
+
 # ══════════════════════════════════════════════════════════════════
-# 8. ORQUESTADOR PRINCIPAL
+# 8. FASES DE PROCESAMIENTO
+#    (compartidas entre el robot diario y el bootstrap histórico)
+# ══════════════════════════════════════════════════════════════════
+
+def procesar_solicitudes(
+    outlook: HerramientasOutlook, sql: GestorBackupSQL,
+    desde: datetime, tolerante: bool = False
+) -> tuple:
+    """Escanea la Bandeja de entrada y registra las solicitudes.
+
+    tolerante=True (bootstrap): registra aunque falten campos.
+    tolerante=False (diario): los incompletos van a Pendientes.
+    Devuelve (registrados, pendientes).
+    """
+    registrados = 0
+    pendientes  = 0
+
+    msgs = outlook.correos_desde(outlook.inbox, desde)
+    print(f"  Correos en bandeja desde {desde.strftime('%d/%m/%Y')}: {len(msgs)}\n")
+
+    for m in msgs:
+        try:
+            asunto = m.Subject or ""
+
+            # Filtro: solo correos cuyo asunto menciona un tipo de solicitud
+            if not ProcesadorAsunto.es_solicitud(asunto):
+                continue
+
+            # Las respuestas/reenvíos del mismo hilo también llegan a la
+            # bandeja; la solicitud original es la que NO tiene prefijo RE:/RV:
+            es_reply = bool(re.match(r"(?i)^\s*(RE|RV|FW|FWD)\s*:", asunto))
+
+            conv_id = m.ConversationID
+
+            if sql.existe_conversation(conv_id) or sql.existe_pendiente(conv_id):
+                continue
+
+            if es_reply:
+                # Reply de un hilo que no está registrado: lo dejamos pasar,
+                # la solicitud original aparecerá en el escaneo.
+                continue
+
+            print(f"  [+] Nueva solicitud: {asunto[:60]}")
+
+            d                = ProcesadorAsunto.parsear(asunto)
+            campos_faltantes = ProcesadorAsunto.validar(d)
+
+            if campos_faltantes and not tolerante:
+                sql.registrar_pendiente(
+                    conv_id          = conv_id,
+                    asunto           = asunto,
+                    remitente        = m.SenderName,
+                    campos_faltantes = campos_faltantes,
+                )
+                outlook.guardar_msg(m, f"PENDIENTE_{asunto[:40]}")
+                pendientes += 1
+                continue
+
+            correlativo = sql.get_max_correlativo() + 1
+            ruta_msg    = outlook.guardar_msg(
+                m, f"REQ_{correlativo:04d}_{d['DNI']}"
+            )
+
+            fila = {
+                "Nro_Correlativo":    correlativo,
+                "Fecha":              m.ReceivedTime.strftime("%d/%m/%Y"),
+                "Hora":               m.ReceivedTime.strftime("%H:%M"),
+                "Remitente":          m.SenderName,
+                "Asunto":             asunto,
+                "Segmento":           d["Segmento"],
+                "Tipo_Solicitud":     d["Tipo_Solicitud"],
+                "DNI":                d["DNI"],
+                "Nombre_Cliente":     d["Nombre_Cliente"],
+                "Sustento":           ruta_msg,
+                "Respondido_Por":     "-",
+                "Fecha_Respuesta":    "-",
+                "Hora_Respuesta":     "-",
+                "Tiempo_Respuesta":   "-",
+                "Sustento_Respuesta": "-",
+                "Mes":                m.ReceivedTime.strftime("%m"),
+                "Anio":               m.ReceivedTime.strftime("%Y"),
+                "Estado":             "Pendiente",
+                "ConversationID":     conv_id,
+            }
+
+            sql.insertar_solicitud(fila)
+            registrados += 1
+            print(f"  ✔  Correlativo: {correlativo:04d} "
+                  f"[{d['Tipo_Solicitud']}]\n")
+
+        except Exception as e:
+            print(f"  ▲ Error solicitud [{getattr(m, 'Subject', '?')[:60]}]: {e}")
+
+    return registrados, pendientes
+
+
+def procesar_respuestas(
+    outlook: HerramientasOutlook, sql: GestorBackupSQL, desde: datetime
+) -> int:
+    """Escanea Elementos enviados del buzón: si un correo enviado
+    pertenece a un hilo registrado y aún Pendiente, es la respuesta
+    del analista. Devuelve cuántas respuestas se registraron."""
+    respuestas = 0
+
+    if outlook.enviados is None:
+        print("  ▲ Sin acceso a Elementos enviados — fase omitida.")
+        return 0
+
+    msgs = outlook.correos_desde(outlook.enviados, desde)
+    print(f"  Enviados desde {desde.strftime('%d/%m/%Y')}: {len(msgs)}\n")
+
+    for m in msgs:
+        try:
+            conv_id = m.ConversationID
+
+            # Solo nos interesan hilos registrados y aún sin respuesta
+            if sql.get_estado(conv_id) != "Pendiente":
+                continue
+
+            print(f"  [✓] Respuesta detectada: {(m.Subject or '')[:60]}")
+
+            ruta_resp  = outlook.guardar_msg(m, f"RESP_{conv_id[:20]}")
+            fecha_resp = m.SentOn
+            inicio     = sql.get_fecha_solicitud(conv_id)
+            demora     = (
+                formatear_demora(inicio, a_naive(fecha_resp))
+                if inicio else "-"
+            )
+
+            sql.registrar_respuesta(
+                conv_id          = conv_id,
+                respondido_por   = m.SenderName,
+                fecha_resp       = fecha_resp.strftime("%d/%m/%Y"),
+                hora_resp        = fecha_resp.strftime("%H:%M"),
+                tiempo_respuesta = demora,
+                ruta_respuesta   = ruta_resp,
+            )
+            respuestas += 1
+
+        except Exception as e:
+            print(f"  ▲ Error respuesta [{getattr(m, 'Subject', '?')[:60]}]: {e}")
+
+    return respuestas
+
+
+# ══════════════════════════════════════════════════════════════════
+# 9. ORQUESTADOR PRINCIPAL
 # ══════════════════════════════════════════════════════════════════
 
 def main():
@@ -445,6 +659,7 @@ def main():
     print(f"  🕐  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  👤  Usuario: {os.getenv('USERNAME', 'desconocido')}")
     print(f"  📂  Base: {_BASE}")
+    print(f"  📬  Buzón: {CONFIG['BUZON'] or '(cuenta por defecto)'}")
     print(f"{sep}\n")
 
     outlook = HerramientasOutlook(CONFIG["BUZON"])
@@ -454,139 +669,24 @@ def main():
         print("❌ No se pudo conectar a Outlook. Abortando.")
         return
 
-    cambios    = 0
-    pendientes = 0
+    desde = datetime.now() - timedelta(days=CONFIG["DIAS_VENTANA"])
+    desde = datetime(desde.year, desde.month, desde.day)
 
-    # ── FASE 1: SOLICITUDES ────────────────────────────────────────
+    # ── FASE 1: SOLICITUDES (Bandeja de entrada) ──────────────────
     print(f"{'─'*40}")
-    print("  FASE 1 — Solicitudes entrantes")
+    print("  FASE 1 — Solicitudes (Bandeja de entrada)")
     print(f"{'─'*40}\n")
 
-    sol_folder = outlook.buscar_carpeta(CONFIG["FOLDER_SOLICITUDES"])
+    registrados, pendientes = procesar_solicitudes(
+        outlook, sql, desde, tolerante=False
+    )
 
-    if not sol_folder:
-        print(f"  ▲ Carpeta '{CONFIG['FOLDER_SOLICITUDES']}' no encontrada.")
-    else:
-        msgs = [m for m in sol_folder.Items if m.UnRead]
-        msgs.sort(key=lambda x: x.ReceivedTime)
-        print(f"  Correos no leídos: {len(msgs)}\n")
-
-        for m in msgs:
-            try:
-                conv_id = m.ConversationID
-
-                if sql.existe_conversation(conv_id):
-                    print(f"  [DUP] ConversationID ya registrado: {m.Subject[:50]}")
-                    m.UnRead = False
-                    continue
-
-                print(f"  [+] Nueva solicitud: {m.Subject[:60]}")
-
-                d                = ProcesadorAsunto.parsear(m.Subject)
-                campos_faltantes = ProcesadorAsunto.validar(d)
-
-                if campos_faltantes:
-                    sql.registrar_pendiente(
-                        conv_id          = conv_id,
-                        asunto           = m.Subject,
-                        remitente        = m.SenderName,
-                        campos_faltantes = campos_faltantes,
-                    )
-                    outlook.guardar_msg(m, f"PENDIENTE_{m.Subject[:40]}")
-                    m.UnRead = False
-                    pendientes += 1
-                    continue
-
-                correlativo = sql.get_max_correlativo() + 1
-                ruta_msg    = outlook.guardar_msg(
-                    m, f"REQ_{correlativo:04d}_{d['DNI']}"
-                )
-
-                fila = {
-                    "Nro_Correlativo":    correlativo,
-                    "Fecha":              m.ReceivedTime.strftime("%d/%m/%Y"),
-                    "Hora":               m.ReceivedTime.strftime("%H:%M"),
-                    "Remitente":          m.SenderName,
-                    "Asunto":             m.Subject,
-                    "Segmento":           d["Segmento"],
-                    "Tipo_Solicitud":     d["Tipo_Solicitud"],
-                    "DNI":                d["DNI"],
-                    "Nombre_Cliente":     d["Nombre_Cliente"],
-                    "Sustento":           ruta_msg,
-                    "Respondido_Por":     "-",
-                    "Fecha_Respuesta":    "-",
-                    "Hora_Respuesta":     "-",
-                    "Tiempo_Respuesta":   "-",
-                    "Sustento_Respuesta": "-",
-                    "Mes":                m.ReceivedTime.strftime("%m"),
-                    "Anio":               m.ReceivedTime.strftime("%Y"),
-                    "Estado":             "Pendiente",
-                    "ConversationID":     conv_id,
-                }
-
-                sql.insertar_solicitud(fila)
-                m.UnRead = False
-                cambios  += 1
-                print(f"  ✔  Correlativo: {correlativo:04d} "
-                      f"[{d['Tipo_Solicitud']}]\n")
-
-            except Exception as e:
-                print(f"  ▲ Error solicitud [{getattr(m, 'Subject', '?')[:60]}]: {e}")
-
-    # ── FASE 2: RESPUESTAS ─────────────────────────────────────────
+    # ── FASE 2: RESPUESTAS (Elementos enviados) ───────────────────
     print(f"\n{'─'*40}")
-    print("  FASE 2 — Respuestas")
+    print("  FASE 2 — Respuestas (Elementos enviados)")
     print(f"{'─'*40}\n")
 
-    resp_folder = outlook.buscar_carpeta(CONFIG["FOLDER_RESPUESTAS"])
-
-    if not resp_folder:
-        print(f"  ▲ Carpeta '{CONFIG['FOLDER_RESPUESTAS']}' no encontrada.")
-    else:
-        msgs = [m for m in resp_folder.Items if m.UnRead]
-        msgs.sort(key=lambda x: x.ReceivedTime)
-        print(f"  Respuestas no leídas: {len(msgs)}\n")
-
-        for m in msgs:
-            try:
-                conv_id = m.ConversationID
-
-                if not sql.existe_conversation(conv_id):
-                    print(f"  [WARN] ConversationID no registrado: {m.Subject[:60]}")
-                    m.UnRead = False
-                    continue
-
-                print(f"  [✓] Respuesta detectada: {m.Subject[:60]}")
-
-                ruta_resp = outlook.guardar_msg(
-                    m, f"RESP_{conv_id[:20]}"
-                )
-
-                fecha_resp = m.ReceivedTime
-                # naive datetime para restar contra lo guardado en SQLite
-                fecha_resp_naive = datetime(
-                    fecha_resp.year, fecha_resp.month, fecha_resp.day,
-                    fecha_resp.hour, fecha_resp.minute
-                )
-                inicio = sql.get_fecha_solicitud(conv_id)
-                demora = (
-                    formatear_demora(inicio, fecha_resp_naive)
-                    if inicio else "-"
-                )
-
-                sql.registrar_respuesta(
-                    conv_id          = conv_id,
-                    respondido_por   = m.SenderName,
-                    fecha_resp       = fecha_resp.strftime("%d/%m/%Y"),
-                    hora_resp        = fecha_resp.strftime("%H:%M"),
-                    tiempo_respuesta = demora,
-                    ruta_respuesta   = ruta_resp,
-                )
-                m.UnRead = False
-                cambios  += 1
-
-            except Exception as e:
-                print(f"  ▲ Error respuesta [{getattr(m, 'Subject', '?')[:60]}]: {e}")
+    respuestas = procesar_respuestas(outlook, sql, desde)
 
     # ── EXPORTACIÓN ────────────────────────────────────────────────
     print(f"\n{'─'*40}")
@@ -605,7 +705,8 @@ def main():
     print(f"\n{sep}")
     print(f"  ✅  Finalizado — {datetime.now().strftime('%H:%M:%S')}")
     print(f"{'─'*65}")
-    print(f"  Registros nuevos / actualizados : {cambios}")
+    print(f"  Solicitudes nuevas              : {registrados}")
+    print(f"  Respuestas registradas          : {respuestas}")
     print(f"  Asuntos sin formato (pendientes): {pendientes}")
     if pendientes > 0:
         print("  → Revisar: Solicitudes_Sin_Formato.xlsx")
