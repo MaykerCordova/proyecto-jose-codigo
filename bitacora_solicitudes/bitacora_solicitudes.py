@@ -58,6 +58,11 @@ CONFIG = {
     # ⚠️ AJUSTAR: nombres reales de las carpetas en Outlook
     "FOLDER_SOLICITUDES": "Solicitudes_Clientes",
     "FOLDER_RESPUESTAS":  "Solicitudes_Respuestas",
+    # ⚠️ AJUSTAR: buzón donde llegan los correos.
+    #   ""  → tu cuenta personal (la cuenta por defecto de Outlook)
+    #   "Prevencion de Fraude" → nombre EXACTO del buzón compartido,
+    #   tal como aparece en el panel izquierdo de Outlook.
+    "BUZON": "",
 }
 
 # ══════════════════════════════════════════════════════════════════
@@ -362,7 +367,8 @@ def exportar_excel_pendientes(sql: GestorBackupSQL, ruta: str):
 
 class HerramientasOutlook:
 
-    def __init__(self):
+    def __init__(self, buzon: str = ""):
+        """buzon: nombre del buzón compartido; "" usa la cuenta por defecto."""
         self.outlook = None
         self.inbox   = None
         try:
@@ -371,9 +377,27 @@ class HerramientasOutlook:
                 .Dispatch("Outlook.Application")
                 .GetNamespace("MAPI")
             )
-            self.inbox = self.outlook.GetDefaultFolder(6)
+            if buzon:
+                # Bandeja de entrada del buzón compartido
+                store      = self.outlook.Folders[buzon]
+                self.inbox = self._inbox_de_store(store)
+                if self.inbox is None:
+                    print(f"  ▲ No se encontró la Bandeja de entrada "
+                          f"del buzón '{buzon}'.")
+            else:
+                self.inbox = self.outlook.GetDefaultFolder(6)
         except Exception as e:
             print(f"  ▲ Error conectando a Outlook: {e}")
+
+    @staticmethod
+    def _inbox_de_store(store):
+        """La bandeja de entrada puede llamarse distinto según el idioma."""
+        for nombre in ("Bandeja de entrada", "Inbox"):
+            try:
+                return store.Folders[nombre]
+            except Exception:
+                continue
+        return None
 
     @property
     def conectado(self) -> bool:
@@ -423,7 +447,7 @@ def main():
     print(f"  📂  Base: {_BASE}")
     print(f"{sep}\n")
 
-    outlook = HerramientasOutlook()
+    outlook = HerramientasOutlook(CONFIG["BUZON"])
     sql     = GestorBackupSQL(CONFIG["RUTA_DB_SQLITE"])
 
     if not outlook.conectado:

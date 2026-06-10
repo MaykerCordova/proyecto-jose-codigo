@@ -40,7 +40,7 @@ def main():
     print(f"  📅  Desde: {FECHA_INICIO.strftime('%d/%m/%Y')}")
     print(f"{sep}\n")
 
-    outlook = HerramientasOutlook()
+    outlook = HerramientasOutlook(CONFIG["BUZON"])
     sql     = GestorBackupSQL(CONFIG["RUTA_DB_SQLITE"])
 
     if not outlook.conectado:
