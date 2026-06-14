@@ -795,6 +795,52 @@ else:
     df["FLAG_BIN12_REPETIDO_DIA"]  = 0
     print("  BIN_12 no disponible — ejecuta consolidar.py")
 
+# ── Fecha de vencimiento × BIN ─────────────────────────────────────────────────
+# Tarjetas generadas por algoritmo suelen compartir la misma fecha de vencimiento.
+# En lotes nuevos la columna puede venir vacía o en cero — se normaliza a NaN.
+col_ven = C.get("fecha_vencimiento", "")
+if col_ven and col_ven in df.columns and col_bin and col_bin in df.columns:
+    _VACIOS_VEN = {"0", "00", "0000", "00/00", "0/0", "", "nan", "none", "null"}
+    df["_VEN"] = (
+        df[col_ven].astype(str).str.strip().str.lower()
+        .where(lambda x: ~x.isin(_VACIOS_VEN), other=np.nan)
+    )
+
+    # Fechas de vencimiento distintas por BIN×día (baja = sospechoso)
+    _ven_dist = (
+        df[df["_VEN"].notna()].groupby([col_bin, "FECHA_DIA"])["_VEN"]
+        .nunique().reset_index()
+        .rename(columns={"_VEN": "FECHAS_VEN_DIST_BIN_DIA"})
+    )
+    df = df.merge(_ven_dist, on=[col_bin, "FECHA_DIA"], how="left")
+    df["FECHAS_VEN_DIST_BIN_DIA"] = df["FECHAS_VEN_DIST_BIN_DIA"].fillna(0).astype(int)
+
+    # Cuántas tarjetas distintas comparten el mismo BIN + misma fecha de vencimiento
+    if "TARJETA" in df.columns:
+        _ven_tar = (
+            df[df["_VEN"].notna()].groupby([col_bin, "FECHA_DIA", "_VEN"])["TARJETA"]
+            .nunique().reset_index()
+            .rename(columns={"TARJETA": "TARJETAS_MISMO_VEN_BIN"})
+        )
+        df = df.merge(_ven_tar, on=[col_bin, "FECHA_DIA", "_VEN"], how="left")
+        df["TARJETAS_MISMO_VEN_BIN"] = df["TARJETAS_MISMO_VEN_BIN"].fillna(0).astype(int)
+    else:
+        df["TARJETAS_MISMO_VEN_BIN"] = 0
+
+    # Flag: ≥3 tarjetas del mismo BIN con misma fecha de vencimiento → generadas
+    df["FLAG_VEN_CONCENTRADA_BIN"] = (df["TARJETAS_MISMO_VEN_BIN"] >= 3).astype(int)
+    df.drop(columns=["_VEN"], inplace=True)
+
+    print(f"  FECHAS_VEN_DIST_BIN_DIA  máx: {df['FECHAS_VEN_DIST_BIN_DIA'].max()}")
+    print(f"  TARJETAS_MISMO_VEN_BIN   máx: {df['TARJETAS_MISMO_VEN_BIN'].max()}")
+    print(f"  FLAG_VEN_CONCENTRADA_BIN    : {df['FLAG_VEN_CONCENTRADA_BIN'].sum():,} txn")
+else:
+    df["FECHAS_VEN_DIST_BIN_DIA"]  = 0
+    df["TARJETAS_MISMO_VEN_BIN"]   = 0
+    df["FLAG_VEN_CONCENTRADA_BIN"] = 0
+    _motivo = "no configurado en config.py" if not col_ven else f"'{col_ven}' no encontrado en parquet"
+    print(f"  fecha_vencimiento {_motivo} — variables VEN en 0")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  BLOQUE J — RECHAZOS Y CASCADA CVV  (solo si SOLO_APROBADAS = False)
@@ -1110,6 +1156,7 @@ VARS_GENERADAS = [
     "TARJETAS_MISMO_BIN10_DIA","FLAG_BIN10_REPETIDO_DIA",
     "TARJETAS_MISMO_BIN11_DIA","FLAG_BIN11_REPETIDO_DIA",
     "TARJETAS_MISMO_BIN12_DIA","FLAG_BIN12_REPETIDO_DIA",
+    "FECHAS_VEN_DIST_BIN_DIA","TARJETAS_MISMO_VEN_BIN","FLAG_VEN_CONCENTRADA_BIN",
     "N_RECHAZOS_24H","N_CVV_FAIL_24H","HUBO_CVV_FAIL_PREVIO",
     "HUBO_FRAUDE_PREVIO_24H","PREV_FUE_FRAUDE","MIN_DESDE_ULTIMO_FRAUDE",
     "SCORE_RIESGO","PERFIL_RIESGO","FLAG_HORARIO_RIESGO",

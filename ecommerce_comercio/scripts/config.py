@@ -125,6 +125,9 @@ COLS = {
     "q_transaccional"  : "CC : K05_COUNTMP_TAMANO COMERCIO", # txn del comercio el mes anterior
                                                               # → identifica si es comercio nuevo o grande
     "score_riesgo_mon" : "SCORE DE RIESGO",                  # score que ya calcula Monitor
+    "fecha_vencimiento": "ACF-FECHA VENCIMIENTO TARJETA",   # fecha vencimiento (YYMM o MM/YY)
+                                                              # ← ajustar al nombre real si difiere
+                                                              # Vacíos/ceros se tratan como sin dato
 
     # ── COLUMNAS YA PROCESADAS POR MONITOR ───────────────────────────────────
     "grupo_horario"    : "ACF-GRUPO DE HORARIO",
