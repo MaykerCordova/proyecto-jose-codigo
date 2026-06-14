@@ -93,6 +93,7 @@ col_monto = C["monto"]
 col_cli   = C["id_cliente"]
 col_com   = C["comercio_nom"]
 col_fh    = C["fecha_hora"]
+col_bin   = C.get("bin", "")
 
 # FECHA_HORA la crea consolidar.py — si no existe, crear columna vacía y avisar
 if col_fh not in df.columns:
@@ -934,7 +935,6 @@ else:
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[Q] Velocidad por BIN...")
 
-col_bin = C.get("bin", "")
 if col_bin and col_bin in df.columns:
     df = df.sort_values([col_bin, col_fh]).reset_index(drop=True)
     df["_ts_q"] = df[col_fh].astype(np.int64) // 10**9
