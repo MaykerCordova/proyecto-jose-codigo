@@ -354,6 +354,96 @@ Proponer reglas basadas en monto + score Monitor en lugar de velocidad.
 
 ---
 
+### Si tienes el output del análisis ML no supervisado (Bloque P / notebook):
+```
+CONTEXTO ADICIONAL: Se ejecutó el pipeline de ML no supervisado (Isolation Forest + HDBSCAN).
+El parquet o CSV adjunto incluye las columnas: ANOMALY_SCORE, FLAG_ANOMALIA_IF, CLUSTER_HDBSCAN,
+SCORE_SOSPECHA (y posiblemente: TRX_BIN_1H, FLAG_RAFAGA_BIN_1H, FLAG_MONTO_ROBOTICO_BIN,
+FLAG_BIN10_REPETIDO_DIA, FLAG_VEN_CONCENTRADA_BIN).
+
+CÓMO INTERPRETAR ANOMALY_SCORE (Isolation Forest):
+- Escala 0–1. Cuanto más cercano a 1, más fácil fue "aislar" la txn del resto → más anómala.
+- FLAG_ANOMALIA_IF = 1 marca el ~5% superior de anomalías.
+- El modelo NO usó la etiqueta F para entrenarse — detecta anomalías puras.
+- Casos peligrosos: indicador N con ANOMALY_SCORE > 0.70 → fraude aún no revisado por analista.
+- No todo ANOMALY_SCORE alto es fraude: puede ser txn legítima con comportamiento inusual.
+  Cruzar siempre con BIN, SCORE_RIESGO y flags de velocidad para confirmar.
+
+CÓMO INTERPRETAR CLUSTER_HDBSCAN:
+- Valores ≥ 0 (0, 1, 2, …): grupos de txn con comportamiento similar entre sí.
+  Cada cluster tiene un "prototipo" — si un cluster tiene tasa F% alta, todas las txn de ese cluster comparten ese patrón de fraude.
+- Valor -1 (ruido): txn que no encajan en ningún grupo — los más raros y atípicos.
+  Son candidatos prioritarios de revisión porque el modelo los considera inclasificables.
+  Un cluster -1 con indicador N = txn sospechosa fuera de cualquier patrón conocido.
+
+CÓMO INTERPRETAR SCORE_SOSPECHA:
+- Suma ponderada de: FLAG_RAFAGA_BIN_1H (peso 2), FLAG_MONTO_ROBOTICO_BIN (peso 2),
+  FLAG_BIN10_REPETIDO_DIA, FLAG_BIN11_REPETIDO_DIA, FLAG_VEN_CONCENTRADA_BIN,
+  FLAG_CLIENTES_BIN_ALTO, FLAG_ANOMALIA_IF (peso 2) + ANOMALY_SCORE escalado.
+- Score ≥ 4 = alta sospecha. Score ≥ 6 = prioridad de revisión inmediata.
+- A diferencia del SCORE_RIESGO (Bloque L), el SCORE_SOSPECHA se centra en señales de BIN y generación de tarjetas, no en velocidad del cliente.
+
+SEÑALES DE ATAQUE ROBOTICO (Bloque R):
+- CV_MONTO_BIN_DIA ≈ 0: todas las txn del BIN ese día tienen el mismo monto → generación automatizada.
+- N_TARJETAS_MISMO_MONTO_BIN ≥ 3 + CV_MONTO_BIN_DIA < 0.05 = FLAG_MONTO_ROBOTICO_BIN = 1.
+- Diferente al card testing clásico: aquí el monto es idéntico entre tarjetas (no aleatorio).
+
+SEÑALES DE CARD TESTING POR BIN (Bloque I extendido):
+- FLAG_BIN10_REPETIDO_DIA: varias tarjetas distintas comparten los primeros 10 dígitos el mismo día.
+  BIN10 compartido = sospechoso (generación secuencial de tarjetas desde una misma fuente).
+- FLAG_BIN11_REPETIDO_DIA: BIN11 compartido = muy sospechoso.
+- FLAG_BIN12_REPETIDO_DIA: BIN12 compartido = casi certeza de generación programática.
+- FLAG_VEN_CONCENTRADA_BIN: varias tarjetas del mismo BIN tienen la misma fecha de vencimiento.
+  Tarjetas legítimas del mismo BIN tienen vencimientos distribuidos; las generadas comparten fecha.
+
+TU TAREA (análisis ML):
+1. Ordenar las txn con indicador N por SCORE_SOSPECHA desc. Describir el perfil de las top 10.
+2. Identificar qué clusters (CLUSTER_HDBSCAN) tienen mayor tasa F%. Describir el patrón de cada cluster caliente.
+3. Calcular LIFT del FLAG_ANOMALIA_IF: Precision% ÷ Tasa_global_fraude%.
+   Si LIFT > 3 = el modelo detecta fraude 3x mejor que al azar.
+4. Identificar BINs donde FLAG_MONTO_ROBOTICO_BIN = 1 y cruzar con indicador → ¿ya tienen fraudes F?
+5. Comparar txn con FLAG_VEN_CONCENTRADA_BIN=1 vs las que no: ¿la tasa F% es mayor?
+6. Proponer: ¿cuáles de estos flags del ML deberían convertirse en reglas en Monitor?
+   Para cada uno: dar Precision%, Recall%, Ratio_F_vs_noFraude.
+```
+
+---
+
+## GUÍA RÁPIDA DE INTERPRETACIÓN — ISOLATION FOREST Y HDBSCAN
+
+> Referencia rápida para el analista — sin necesidad de subir archivos a un modelo.
+
+### Isolation Forest — Preguntas clave al ver el output
+
+| Pregunta | Cómo responder con los datos |
+|---|---|
+| ¿El modelo funciona bien? | Comparar ANOMALY_SCORE mediana F vs mediana N. Si F_mediana > N_mediana → discrimina bien. |
+| ¿Cuánto LIFT tiene? | Precision_IF% ÷ Tasa_global_F%. Si LIFT ≥ 3 → útil como regla. |
+| ¿Qué umbral usar? | Buscar el ANOMALY_SCORE donde Precision% > 30% sin sacrificar recall < 20%. |
+| ¿Por qué una txn tiene score alto? | Revisar las variables del Bloque Q y R — generalmente `TRX_BIN_1H` alto o `CV_MONTO_BIN_DIA` ≈ 0. |
+| ¿Es fraude el N con score 0.80? | Probablemente sí, pero necesita revisión manual — es la hipótesis, no la confirmación. |
+
+### HDBSCAN — Qué buscar en cada cluster
+
+| Cluster | Qué significa | Acción |
+|---|---|---|
+| -1 (ruido) | Txn que no encajan en ningún patrón | Revisar primero — son los más atípicos |
+| Cluster con tasa F% alta | Grupo homogéneo de fraudes con patrón similar | Describir el patrón → candidato a regla |
+| Cluster con tasa F% baja | Comportamiento normal agrupado | Usar como "perfil de lo legítimo" |
+| Cluster con mezcla F y N | Patrón intermedio — fraude sigiloso mezclado | Revisar los N de ese cluster con ANOMALY_SCORE > 0.6 |
+
+### Señales de alarma que justifican revisión inmediata
+
+```
+ANOMALY_SCORE > 0.75  AND  indicador = N   → fraude probable no revisado
+CLUSTER_HDBSCAN = -1  AND  FLAG_RAFAGA_BIN_1H = 1  → ataque fuera de patrón conocido
+FLAG_MONTO_ROBOTICO_BIN = 1  AND  FLAG_BIN11_REPETIDO_DIA = 1  → generación automatizada activa
+FLAG_VEN_CONCENTRADA_BIN = 1  AND  CLIENTES_BIN_DIA ≥ 5  → lote de tarjetas del mismo origen
+SCORE_SOSPECHA ≥ 6  AND  indicador = N  → prioridad máxima de revisión
+```
+
+---
+
 ## GUÍA DE MODELO
 
 | Modelo | Cuándo usarlo |
@@ -361,5 +451,8 @@ Proponer reglas basadas en monto + score Monitor en lugar de velocidad.
 | **Claude Opus / Think / o3** | Prompt completo + Excel adjunto — analiza y cruza las 22 hojas solo. Mejor para patrones complejos y análisis multi-hoja. |
 | **GPT-4o / Copilot estándar** | Prompt corto + pegar los datos clave en texto. Suficiente para un análisis rápido. |
 | **Gemini 2.0 Deep Research** | Útil si también quieres que busque contexto externo (tendencias de fraude en el sector). |
+| **Claude Opus / Think / o3** | Para el análisis ML: adjuntar el CSV de los top 50 sospechosos del notebook + el bloque ML adicional. |
 
-**Recomendación:** Think / Claude Opus + prompt completo + Excel adjunto + bloque adicional según el patrón detectado.
+**Recomendación general:** Think / Claude Opus + prompt completo + Excel adjunto + bloque adicional según el patrón detectado.
+
+**Recomendación para ML:** Claude Opus + bloque ML + CSV exportado del notebook (`output/lista_revision_N_{COMERCIO}.csv`).
