@@ -737,11 +737,51 @@ print(f"  FLAG_MONTO_REDONDO: {df['FLAG_MONTO_REDONDO'].sum():,} ({df['FLAG_MONT
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  BLOQUE I — CARD TESTING (BIN extendido)
-#  BIN_12 repetido en el mismo día con distintas tarjetas → tarjetas generadas
+#  Cuando el mismo prefijo largo del número de tarjeta aparece en múltiples
+#  tarjetas distintas el mismo día, indica generación algorítmica de tarjetas.
+#
+#  Escala de sospecha por longitud de BIN compartido:
+#    BIN_6  repetido → normal (mismo banco/producto)
+#    BIN_10 repetido → sospechoso   → FLAG_BIN10_REPETIDO_DIA
+#    BIN_11 repetido → muy sospechoso → FLAG_BIN11_REPETIDO_DIA
+#    BIN_12 repetido → casi seguro generado → FLAG_BIN12_REPETIDO_DIA
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[I] Card testing (BIN extendido)...")
 
-if "BIN_12" in df.columns and "TARJETA" in df.columns:
+_tiene_tarjeta = "TARJETA" in df.columns
+_tiene_bin12   = "BIN_12"  in df.columns
+
+# Derivar BIN_10 y BIN_11 desde BIN_12 o TARJETA
+if _tiene_bin12:
+    df["BIN_10"] = df["BIN_12"].astype(str).str[:10]
+    df["BIN_11"] = df["BIN_12"].astype(str).str[:11]
+elif _tiene_tarjeta:
+    df["BIN_10"] = df["TARJETA"].astype(str).str[:10]
+    df["BIN_11"] = df["TARJETA"].astype(str).str[:11]
+
+if _tiene_tarjeta and ("BIN_10" in df.columns):
+    for _blen, _col_bin, _col_tar, _col_flag in [
+        (10, "BIN_10", "TARJETAS_MISMO_BIN10_DIA", "FLAG_BIN10_REPETIDO_DIA"),
+        (11, "BIN_11", "TARJETAS_MISMO_BIN11_DIA", "FLAG_BIN11_REPETIDO_DIA"),
+    ]:
+        _grp = (
+            df.groupby([_col_bin, "FECHA_DIA"])["TARJETA"]
+            .nunique().reset_index()
+            .rename(columns={"TARJETA": _col_tar})
+        )
+        df = df.merge(_grp, on=[_col_bin, "FECHA_DIA"], how="left")
+        df[_col_flag] = (df[_col_tar] > 1).astype(int)
+        print(f"  {_col_flag}: {df[_col_flag].sum():,} txn")
+else:
+    for _col_tar, _col_flag in [
+        ("TARJETAS_MISMO_BIN10_DIA", "FLAG_BIN10_REPETIDO_DIA"),
+        ("TARJETAS_MISMO_BIN11_DIA", "FLAG_BIN11_REPETIDO_DIA"),
+    ]:
+        df[_col_tar]  = 0
+        df[_col_flag] = 0
+    print("  BIN_10/BIN_11 no disponibles — requiere BIN_12 o TARJETA en parquet")
+
+if _tiene_bin12 and _tiene_tarjeta:
     bin12_dia = (
         df.groupby(["BIN_12","FECHA_DIA"])["TARJETA"]
         .nunique().reset_index()
@@ -1066,6 +1106,9 @@ VARS_GENERADAS = [
     "TOTAL_TRX_MCC","RANKING_MCC",
     "FLAG_MONTO_REDONDO","FLAG_MONTO_BAJO","ZSCORE_MONTO_COMERCIO",
     "RANGO_MONTO","RANGO_MONTO_PERCENTIL","RANGO_MONTO_ARBOL","DECIL_MONTO",
+    "BIN_10","BIN_11",
+    "TARJETAS_MISMO_BIN10_DIA","FLAG_BIN10_REPETIDO_DIA",
+    "TARJETAS_MISMO_BIN11_DIA","FLAG_BIN11_REPETIDO_DIA",
     "TARJETAS_MISMO_BIN12_DIA","FLAG_BIN12_REPETIDO_DIA",
     "N_RECHAZOS_24H","N_CVV_FAIL_24H","HUBO_CVV_FAIL_PREVIO",
     "HUBO_FRAUDE_PREVIO_24H","PREV_FUE_FRAUDE","MIN_DESDE_ULTIMO_FRAUDE",
