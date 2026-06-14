@@ -22,6 +22,7 @@ Bloques:
   N  Vínculos de cliente           → reincidencia de fraude, zscore cliente×comercio
   O  Perfil horario del comercio   → hora típica, FLAG_HORA_FUERA_PERFIL_COMERCIO
   Q  Velocidad por BIN             → TRX/MNT_BIN_1H/24H, CLIENTES_BIN_DIA, flags de ataque
+  R  Generación robótica           → CV_MONTO_BIN_DIA, N_TARJETAS_MISMO_MONTO_BIN, FLAG_MONTO_ROBOTICO_BIN
 """
 
 import sys
@@ -602,17 +603,23 @@ col_mcc = C.get("mcc", "")
 if col_mcc and col_mcc in df.columns:
     totales_mcc = (
         df.groupby(col_mcc).agg(
-            TOTAL_TRX_MCC  = (col_monto,"count"),
-            MONTO_TOTAL_MCC = (col_monto,"sum"),
-            COM_EN_MCC      = (col_com,  "nunique"),
+            TOTAL_TRX_MCC   = (col_monto,   "count"),
+            MONTO_TOTAL_MCC = (col_monto,   "sum"),
+            COM_EN_MCC      = (col_com,     "nunique"),
+            FRAUDES_MCC     = ("ES_FRAUDE", "sum"),
         ).reset_index()
     )
+    totales_mcc["TASA_FRAUDE_MCC"] = (
+        totales_mcc["FRAUDES_MCC"] / totales_mcc["TOTAL_TRX_MCC"]
+    ).round(4)
     df = df.merge(totales_mcc, on=col_mcc, how="left")
     rank_mcc = totales_mcc[[col_mcc,"TOTAL_TRX_MCC"]].sort_values(
         "TOTAL_TRX_MCC", ascending=False
     ).reset_index(drop=True)
     rank_mcc["RANKING_MCC"] = rank_mcc.index + 1
     df = df.merge(rank_mcc[[col_mcc,"RANKING_MCC"]], on=col_mcc, how="left")
+else:
+    df["TASA_FRAUDE_MCC"] = np.nan
 
 print(f"  Top 3 comercios:\n{rank_com.head(3).to_string(index=False)}")
 print(f"  FLAG_PAIS_INUSUAL: {df['FLAG_PAIS_INUSUAL'].sum():,}")
@@ -909,6 +916,60 @@ else:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  BLOQUE R — SEÑALES DE GENERACIÓN ROBÓTICA
+#  Detecta ataques donde múltiples tarjetas del mismo BIN cobran el mismo
+#  monto exacto en el mismo día. NO requiere etiqueta de fraude (funciona
+#  sobre las N también). Complementa al ML no supervisado.
+#
+#  Patrón típico: BIN 415100 → 47 tarjetas distintas → todas cobran S/98.00
+#  → CV_MONTO_BIN_DIA ≈ 0 → FLAG_MONTO_ROBOTICO_BIN = 1
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n[R] Señales de generación robótica...")
+
+if col_bin and col_bin in df.columns and "TARJETA" in df.columns:
+    # Coeficiente de variación del monto por BIN×día (0 = todos los montos iguales)
+    _cv_bin = (
+        df.groupby([col_bin, "FECHA_DIA"])[col_monto]
+        .agg(_mean="mean", _std="std", N_MONTOS_DIST_BIN_DIA="nunique")
+        .reset_index()
+    )
+    _cv_bin["CV_MONTO_BIN_DIA"] = (
+        _cv_bin["_std"] / _cv_bin["_mean"].replace(0, np.nan)
+    ).round(4).fillna(0)
+    _cv_bin.drop(columns=["_mean", "_std"], inplace=True)
+    df = df.merge(_cv_bin, on=[col_bin, "FECHA_DIA"], how="left")
+
+    # Cuántas tarjetas distintas comparten exactamente el mismo monto en ese BIN×día
+    _monto_bin = (
+        df.groupby([col_bin, "FECHA_DIA", col_monto])["TARJETA"]
+        .nunique().reset_index()
+        .rename(columns={"TARJETA": "N_TARJETAS_MISMO_MONTO_BIN"})
+    )
+    df = df.merge(_monto_bin, on=[col_bin, "FECHA_DIA", col_monto], how="left")
+    df["N_TARJETAS_MISMO_MONTO_BIN"] = df["N_TARJETAS_MISMO_MONTO_BIN"].fillna(1).astype(int)
+
+    # Flag: monto idéntico en ≥3 tarjetas del mismo BIN Y variación casi nula
+    df["FLAG_MONTO_ROBOTICO_BIN"] = (
+        (df["N_TARJETAS_MISMO_MONTO_BIN"] >= 3) &
+        (df["CV_MONTO_BIN_DIA"] < 0.05)
+    ).astype(int)
+
+    n_rob = df["FLAG_MONTO_ROBOTICO_BIN"].sum()
+    print(f"  CV_MONTO_BIN_DIA  mín : {df['CV_MONTO_BIN_DIA'].min():.4f}")
+    print(f"  N_TARJETAS_MISMO_MONTO_BIN máx : {df['N_TARJETAS_MISMO_MONTO_BIN'].max()}")
+    print(f"  FLAG_MONTO_ROBOTICO_BIN : {n_rob:,} txn")
+    if n_rob > 0:
+        tasa_f_rob = df.loc[df["FLAG_MONTO_ROBOTICO_BIN"]==1, "ES_FRAUDE"].mean()
+        print(f"  Tasa fraude en robóticas: {tasa_f_rob*100:.1f}%  ← si > tasa global = señal válida")
+else:
+    df["CV_MONTO_BIN_DIA"]            = np.nan
+    df["N_MONTOS_DIST_BIN_DIA"]       = 0
+    df["N_TARJETAS_MISMO_MONTO_BIN"]  = 0
+    df["FLAG_MONTO_ROBOTICO_BIN"]     = 0
+    print("  BIN o TARJETA no disponibles — Bloque R omitido")
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  BLOQUE K — FLAGS DE REGLAS CONFIGURABLES
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[K] Flags de reglas configurables...")
@@ -1021,6 +1082,11 @@ VARS_GENERADAS = [
     # ── Q: Velocidad por BIN ─────────────────────────────────────────────────
     "TRX_BIN_1H","TRX_BIN_24H","MNT_BIN_1H","MNT_BIN_24H","CLIENTES_BIN_DIA",
     "FLAG_RAFAGA_BIN_1H","FLAG_MONTO_BIN_ALTO_24H","FLAG_CLIENTES_BIN_ALTO",
+    # ── R: Generación robótica ────────────────────────────────────────────────
+    "CV_MONTO_BIN_DIA","N_MONTOS_DIST_BIN_DIA","N_TARJETAS_MISMO_MONTO_BIN",
+    "FLAG_MONTO_ROBOTICO_BIN",
+    # ── G ampliado: MCC fraud rate ────────────────────────────────────────────
+    "TASA_FRAUDE_MCC",
 ]
 
 print("\n" + "─" * 65)
