@@ -61,80 +61,100 @@ SKIPROWS = 4    # El header está en la fila 5 → saltar las 4 primeras
 # =============================================================================
 COLS = {
 
-    # ── TARJETA (se construye combinando dos columnas) ────────────────────────
-    # Python: col1[:6] + col2 + col1[12:]
-    # Power Query: Text.Start(col1, 6) & col2 & Text.Middle(col1, 12)
-    "tarjeta_col1"     : "ACF-TARJETA REGISTRO 750",         # primera columna
-    "tarjeta_col2"     : "ACF-TARJETA POS 7,6 DIGITOS",      # dígitos del medio (pos 7-12)
-    # Columna TARJETA la crea el script automáticamente en consolidar.py
+    # ── TARJETA ───────────────────────────────────────────────────────────────
+    # El número completo se reconstruye en consolidar.py:
+    #   TARJETA = tarjeta_col1[:6] + tarjeta_col2 + tarjeta_col1[12:]
+    "tarjeta_col1"     : "ACF-TARJETA REGISTRO 750",              # posiciones 1-6 y 13+
+    "tarjeta_col2"     : "ACF-TARJETA POS 7,6 DIGITOS",           # posiciones 7-12 (6 dígitos del medio)
     "tarjeta_enc"      : "ACF-NUMERO DE TARJETA ENCRIPTADO AES",  # versión encriptada (auditoría)
+    "bin"              : "ACF-BIN",                                # primeros 6 dígitos del PAN
 
     # ── IDENTIFICADORES ───────────────────────────────────────────────────────
-    "bin"              : "ACF-BIN",
-    "id_cliente"       : "ACF-ID CLIENTE",                   # base de todas las ventanas temporales
-    "num_autorizacion" : "ACF-AUTORIZACION",
-    "num_trx"          : "ACF-NUMERO TRX",
-    "cod_hash"         : "ACF-CODIGO HASH",
+    "id_cliente"       : "ACF-ID CLIENTE",         # clave de cliente — base de ventanas temporales
+    "num_autorizacion" : "ACF-AUTORIZACION",        # código de autorización
+    "num_trx"          : "ACF-NUMERO TRX",          # número de transacción
+    "cod_hash"         : "ACF-CODIGO HASH",         # hash único de la transacción
 
     # ── FECHAS Y HORA ─────────────────────────────────────────────────────────
-    "fecha_trx"        : "ACF-FECHA TRX",                    # formato AAAAMMDD → se convierte a date
-    "hora_trx"         : "ACF-HORA TRX",                     # formato HH:MM:SS
-    "hora_sin_min"     : "ACF-HORA SIN MINUTOS DE LA TRX",   # hora entera (Int)
+    "fecha_trx"        : "ACF-FECHA TRX",               # AAAAMMDD → consolidar.py convierte a date
+    "hora_trx"         : "ACF-HORA TRX",                # HH:MM:SS
+    "hora_sin_min"     : "ACF-HORA SIN MINUTOS DE LA TRX",
     "mes_anio"         : "ACF-MES DEL ANO DE LA TRX",
-    # Columna construida por consolidar.py (no viene en Monitor):
-    "fecha_hora"       : "FECHA_HORA",                       # datetime YYYY-MM-DD HH:MM:SS
+    "fecha_hora"       : "FECHA_HORA",                  # construida por consolidar.py (no viene en Monitor)
+                                                         # formato: YYYY-MM-DD HH:MM:SS
 
     # ── MONTOS ────────────────────────────────────────────────────────────────
-    "monto"            : "ACF-MONTO EN MONEDA LOCAL",
-    "monto_dolar"      : "ACF-MONTO DOLLAR",
+    "monto"            : "ACF-MONTO EN MONEDA LOCAL",      # monto en soles (moneda local)
+    "monto_dolar"      : "ACF-MONTO DOLLAR",               # equivalente en dólares
+    "monto_original"   : "ACF-MONTO ORIGINAL",             # monto en la moneda ORIGINAL de la txn
+                                                            # Lógica en feature_engineering Bloque S:
+                                                            #   monto_original ≈ monto_dolar → txn en USD
+                                                            #   monto_original ≈ monto       → txn en soles
+                                                            #   ninguno de los dos            → otra moneda (sospechoso)
+    "moneda_trx"       : "ACF-MONEDA DE TRANSACCION",      # código ISO de moneda: 604=PEN 840=USD 978=EUR
+                                                            # Usada junto a saldo para detectar
+                                                            # clientes que cambian de moneda de golpe
 
     # ── TARJETA / CLIENTE ─────────────────────────────────────────────────────
-    "tipo_producto"    : "ACF-TIPO PROD TC",                  # TC = crédito | TD = débito
-    "saldo"            : "ACF-SALDO DISPONIBLE EN MONEDA TRX",
+    "tipo_producto"    : "ACF-TIPO PROD TC",               # TC=Crédito | TD=Débito
+    "saldo"            : "ACF-SALDO DISPONIBLE EN MONEDA TRX",  # saldo en la moneda de la txn
+                                                                  # → cruzar con moneda_trx para detectar
+                                                                  #   agotamiento en moneda extranjera
+    "fecha_vencimiento": "ACF-FECHA VENCIMIENTO TARJETA",  # YYMM o MM/YY
+                                                            # Vacíos / ceros → tratados como sin dato
+                                                            # Bloque I: detecta tarjetas con misma fecha VEN
     "segmento"         : "VAA-EVENTO DE COMPROMISO OTRA FUENTE",
-    "organizacion"     : "ACF-ORGANIZACION",                  # código numérico como string — ver ORG_NOMBRE
-    "marca"            : "ACF-MARCA",                         # ← ajusta al nombre real de la columna
-                                                              # Valores: 4 = Visa | 5 = Mastercard
+    "organizacion"     : "ACF-ORGANIZACION",               # código numérico como string → ver ORG_NOMBRE
+
+    # Marca: primer dígito del PAN → 4=Visa | 5=Mastercard
+    # Monitor puede entregar una columna propia; si no, el script la infiere del PAN
+    "marca"            : "ACF-MARCA",
 
     # ── COMERCIO / TRANSACCIÓN ────────────────────────────────────────────────
     "comercio_nom"     : "ACF-NOMBRE/LOCALIZACION COMERCIO",
     "localidad_com"    : "ACF-LOCALIDAD COMERCIO",
     "canal"            : "ACF-CANAL",
-    "entry_mode"       : "ACF-ENTRY MODE",                   # modo ingreso tarjeta
-    "mcc"              : "ACF-MCC +",                        # MCC con + (débito usa esta)
+    "entry_mode"       : "ACF-ENTRY MODE",                 # cómo ingresó la tarjeta → ver ENTRY_MODE_LABEL
+    "mcc"              : "ACF-MCC +",                      # MCC con + (débito usa esta columna)
     "cod_cio"          : "ACF-CODIGO CIO/AGENCIA/OFICINA ORIGEN",
-    "cod_trx"          : "ACF-COD TRX",
-    "v_to"             : "ACF-V/TO",
-    "reverso"          : "ACF-REVERSO",
+    "cod_trx"          : "ACF-COD TRX",                    # código de transacción (tipo de operación)
+    "v_to"             : "ACF-V/TO",                       # código de comercio (V/TO)
+    "reverso"          : "ACF-REVERSO",                    # S/N si la txn fue reversada
+                                                            # Baja relevancia directa en fraude:
+                                                            # un reverso posterior al fraude no cambia el daño
 
     # ── SEGURIDAD / CVV ───────────────────────────────────────────────────────
-    "eci"              : "ACF-ECI/UCAF",                     # Seguro: Visa=5/05 | MC=2/02
-    "cod_red_comercio" : "ACF-COD RED COMERCIO",             # S=Estático TD D=Dinámico E=Estático TC N=Sin CVV
-    "ind_recurrente"   : "ACF-INDICADOR RECURRENTE / MOTO",  # MOTO = Mail Order / Telephone Order
+    "eci"              : "ACF-ECI/UCAF",                   # Seguro: Visa=5/05 | MC=2/02
+    "cod_red_comercio" : "ACF-COD RED COMERCIO",           # S=Estático TD | D=Dinámico | E=Estático TC | N=Sin CVV
+    "ind_recurrente"   : "ACF-INDICADOR RECURRENTE / MOTO",
+    # Valores posibles:
+    #   R = RECURRENTE  → suscripción / cargo automático (aunque el cliente desactive, sigue cobrando)
+    #   M = Mail Order  │
+    #   O = Online      ├─ agrupados como MOTO (Card Not Present)
+    #   T = Telephone   │
+    # En feature_engineering: ES_RECURRENTE (R) se separa de ES_MOTO (M/O/T)
+    # Un patrón de fraude en recurrentes puede indicar suscripción en comercio trampa
 
     # ── BILLETERA DIGITAL (tokenizada) ───────────────────────────────────────
-    "billetera"        : "RESERVADO ALFA 2",                 # primeros 5 chars → ver BILLETERA_LABEL
+    "billetera"        : "RESERVADO ALFA 2",               # primeros 5 chars → ver BILLETERA_LABEL
 
     # ── RESPUESTA / RECHAZO ───────────────────────────────────────────────────
-    "indicador"        : "ACF-INDICADOR DE FRAUDE",          # F=fraude G=buena P=pendiente D=descarte N=normal
-    "cod_respuesta"    : "ACF-COD RPTA",                     # 0/00/000 = APROBADA; resto = DENEGADA
-    "razon_respuesta"  : "ACF-RAZON RESPUESTA",              # texto que interpreta el código
-    "cod_rpta_vplus"   : "CODIGO DE RESPUESTA VISION PLUS",  # código del sistema Vision Plus
+    "indicador"        : "ACF-INDICADOR DE FRAUDE",        # F=Fraude G=Buena P=Pendiente D=Descarte N=Normal
+    "cod_respuesta"    : "ACF-COD RPTA",                   # 0/00/000=APROBADA | resto=DENEGADA
+    "razon_respuesta"  : "ACF-RAZON RESPUESTA",            # texto que interpreta el código de respuesta
+    "cod_rpta_vplus"   : "CODIGO DE RESPUESTA VISION PLUS",
 
-    # ── COMERCIO — PRECALCULADAS POR MONITOR ─────────────────────────────────
-    "q_transaccional"  : "CC : K05_COUNTMP_TAMANO COMERCIO", # txn del comercio el mes anterior
-                                                              # → identifica si es comercio nuevo o grande
-    "score_riesgo_mon" : "SCORE DE RIESGO",                  # score que ya calcula Monitor
-    "fecha_vencimiento": "ACF-FECHA VENCIMIENTO TARJETA",   # fecha vencimiento (YYMM o MM/YY)
-                                                              # ← ajustar al nombre real si difiere
-                                                              # Vacíos/ceros se tratan como sin dato
-
-    # ── COLUMNAS YA PROCESADAS POR MONITOR ───────────────────────────────────
+    # ── MONITOR — PRECALCULADAS ───────────────────────────────────────────────
+    "q_transaccional"  : "CC : K05_COUNTMP_TAMANO COMERCIO",  # txn del comercio el mes anterior
+                                                                # → identifica comercio nuevo vs grande
+    "score_riesgo_mon" : "SCORE DE RIESGO",                    # solo tarjeta de crédito
+                                                                # Visa: 0-99 | Mastercard: 0-999
+                                                                # (mayor score = MENOR riesgo)
     "grupo_horario"    : "ACF-GRUPO DE HORARIO",
     "dia_semana_mon"   : "ACF-DIA DE LA SEMANA DE LA TRX",
 
     # ── PAÍS ──────────────────────────────────────────────────────────────────
-    "pais"             : "ACF-PAIS ORIGEN 87519",            # país donde se realizó la txn
+    "pais"             : "ACF-PAIS ORIGEN 87519",
 
 }
 

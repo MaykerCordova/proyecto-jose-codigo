@@ -23,6 +23,7 @@ Bloques:
   O  Perfil horario del comercio   → hora típica, FLAG_HORA_FUERA_PERFIL_COMERCIO
   Q  Velocidad por BIN             → TRX/MNT_BIN_1H/24H, CLIENTES_BIN_DIA, flags de ataque
   R  Generación robótica           → CV_MONTO_BIN_DIA, N_TARJETAS_MISMO_MONTO_BIN, FLAG_MONTO_ROBOTICO_BIN
+  S  Moneda / divisa               → FLAG_TRX_EN_DOLAR, FLAG_MONEDA_OTRA, FLAG_CAMBIO_MONEDA_CLI, FLAG_AGOTAMIENTO_MONEDA_EXT
 """
 
 import sys
@@ -241,11 +242,14 @@ else:
     df["ES_TARJETA_PRESENTE"] = 0
 
 if col_moto and col_moto in df.columns:
-    df["ES_MOTO"] = df[col_moto].astype(str).str.strip().str.upper().isin(
-        {"S", "SI", "1", "TRUE", "Y", "YES", "M"}
-    ).astype(int)
+    _ind = df[col_moto].astype(str).str.strip().str.upper()
+    # R = suscripción/cargo automático recurrente (se separa de MOTO)
+    # M/O/T = Mail Order / Online / Telephone Order (Card Not Present manual)
+    df["ES_RECURRENTE"] = (_ind == "R").astype(int)
+    df["ES_MOTO"]       = (_ind.isin({"M", "O", "T", "S", "SI", "1", "TRUE", "Y", "YES"})).astype(int)
 else:
-    df["ES_MOTO"] = 0
+    df["ES_RECURRENTE"] = 0
+    df["ES_MOTO"]       = 0
 
 if col_seg and col_seg in df.columns:
     seg_s = df[col_seg].astype(str).str.strip().str.split(".").str[0]
@@ -281,6 +285,8 @@ print(f"  ES_FRAUDE / ES_FRAUDE_APROBADO: {df['ES_FRAUDE'].sum():,} / {df['ES_FR
 print(f"  Aprobadas / Denegadas: {(df['ESTADO']=='APROBADA').sum():,} / {(df['ESTADO']=='DENEGADA').sum():,}")
 print(f"  Seguro / No Seguro   : {(df['SEGURO']=='Seguro').sum():,} / {(df['SEGURO']=='No Seguro').sum():,}")
 print(f"  Tokenizadas          : {df['ES_TOKENIZADA'].sum():,}")
+print(f"  ES_RECURRENTE        : {df['ES_RECURRENTE'].sum():,}  ← cargos automáticos")
+print(f"  ES_MOTO              : {df['ES_MOTO'].sum():,}  ← CNP manual (M/O/T)")
 print(f"  Marca: {df['MARCA_TARJETA'].value_counts().to_dict()}")
 
 
@@ -1056,6 +1062,95 @@ else:
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  BLOQUE S — MONEDA / DIVISA
+#  Detecta transacciones en moneda distinta a la habitual del cliente.
+#
+#  Lógica del monto_original:
+#    monto_original ≈ monto_dolar  → txn realizada en USD
+#    monto_original ≈ monto local  → txn realizada en soles (normal en Perú)
+#    ninguno de los dos            → txn en otra moneda (EUR, GBP, etc.) → muy sospechoso
+#
+#  Lógica del campo moneda_trx (si disponible):
+#    604 = PEN (soles) | 840 = USD | 978 = EUR | otros = inusual
+#    Un cliente que siempre compra en soles y de golpe compra en USD
+#    puede ser: viaje legítimo O tarjeta usada en comercio extranjero fraudulento.
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n[S] Moneda / divisa...")
+
+col_mon_orig = C.get("monto_original", "")
+col_moneda   = C.get("moneda_trx", "")
+
+# ── Moneda de transacción ─────────────────────────────────────────────────────
+MONEDA_LABEL = {"604": "PEN", "840": "USD", "978": "EUR", "826": "GBP"}
+MONEDAS_NORMALES = {"604", "840"}   # soles y dólares son normales en Perú
+
+if col_moneda and col_moneda in df.columns:
+    df["MONEDA_TRX_COD"]   = df[col_moneda].astype(str).str.strip().str.zfill(3)
+    df["MONEDA_TRX_TEXTO"] = df["MONEDA_TRX_COD"].map(MONEDA_LABEL).fillna("OTRA")
+    df["FLAG_MONEDA_INUSUAL"] = (~df["MONEDA_TRX_COD"].isin(MONEDAS_NORMALES)).astype(int)
+    print(f"  MONEDA_TRX_TEXTO:\n{df['MONEDA_TRX_TEXTO'].value_counts().to_string()}")
+    print(f"  FLAG_MONEDA_INUSUAL: {df['FLAG_MONEDA_INUSUAL'].sum():,} txn")
+else:
+    df["MONEDA_TRX_COD"]    = "SIN_DATO"
+    df["MONEDA_TRX_TEXTO"]  = "SIN_DATO"
+    df["FLAG_MONEDA_INUSUAL"] = 0
+    print(f"  '{col_moneda or 'moneda_trx'}' no disponible — Bloque S parcial")
+
+# ── monto_original → inferir divisa si la columna está disponible ─────────────
+col_md = C.get("monto_dolar", "")
+_tiene_orig  = col_mon_orig and col_mon_orig in df.columns
+_tiene_dolar = col_md and col_md in df.columns
+
+if _tiene_orig:
+    df[col_mon_orig] = pd.to_numeric(df[col_mon_orig], errors="coerce")
+
+    if _tiene_dolar:
+        _ratio_usd = (df[col_mon_orig] / df[col_md].replace(0, np.nan)).round(3)
+        df["FLAG_TRX_EN_DOLAR"] = _ratio_usd.between(0.98, 1.02).astype(int)
+    else:
+        df["FLAG_TRX_EN_DOLAR"] = 0
+
+    _ratio_pen = (df[col_mon_orig] / df[col_monto].replace(0, np.nan)).round(3)
+    _es_pen    = _ratio_pen.between(0.98, 1.02)
+    _es_usd    = df["FLAG_TRX_EN_DOLAR"].astype(bool)
+    df["FLAG_MONEDA_OTRA"] = (~_es_pen & ~_es_usd).fillna(0).astype(int)
+
+    print(f"  FLAG_TRX_EN_DOLAR : {df['FLAG_TRX_EN_DOLAR'].sum():,} txn")
+    print(f"  FLAG_MONEDA_OTRA  : {df['FLAG_MONEDA_OTRA'].sum():,} txn  ← ni soles ni dólares")
+else:
+    df["FLAG_TRX_EN_DOLAR"] = 0
+    df["FLAG_MONEDA_OTRA"]  = 0
+    print(f"  '{col_mon_orig or 'monto_original'}' no disponible — flags de divisa en 0")
+
+# ── Cambio de moneda del cliente ──────────────────────────────────────────────
+# Si el cliente normalmente compra en soles y de golpe aparece en dólares (o viceversa),
+# puede ser señal de tarjeta usada en comercio extranjero fraudulento.
+if df["FLAG_TRX_EN_DOLAR"].sum() > 0:
+    _moneda_habitual = (
+        df.groupby(col_cli)["FLAG_TRX_EN_DOLAR"]
+        .transform(lambda x: x.mode()[0] if len(x) > 0 else 0)
+    )
+    df["FLAG_CAMBIO_MONEDA_CLI"] = (
+        df["FLAG_TRX_EN_DOLAR"] != _moneda_habitual
+    ).astype(int)
+    print(f"  FLAG_CAMBIO_MONEDA_CLI: {df['FLAG_CAMBIO_MONEDA_CLI'].sum():,} txn")
+else:
+    df["FLAG_CAMBIO_MONEDA_CLI"] = 0
+
+# ── Saldo en moneda extranjera + monto alto ────────────────────────────────────
+# Si la txn es en moneda extranjera y el saldo restante es bajo → agotamiento
+col_saldo_s = C.get("saldo", "")
+if col_saldo_s and col_saldo_s in df.columns and df["FLAG_MONEDA_INUSUAL"].sum() > 0:
+    df["FLAG_AGOTAMIENTO_MONEDA_EXT"] = (
+        (df["FLAG_MONEDA_INUSUAL"] == 1) &
+        (df[col_saldo_s].fillna(9999) < df[col_monto] * 0.1)
+    ).astype(int)
+    print(f"  FLAG_AGOTAMIENTO_MONEDA_EXT: {df['FLAG_AGOTAMIENTO_MONEDA_EXT'].sum():,} txn")
+else:
+    df["FLAG_AGOTAMIENTO_MONEDA_EXT"] = 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  BLOQUE K — FLAGS DE REGLAS CONFIGURABLES
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[K] Flags de reglas configurables...")
@@ -1177,6 +1272,11 @@ VARS_GENERADAS = [
     "FLAG_MONTO_ROBOTICO_BIN",
     # ── G ampliado: MCC fraud rate ────────────────────────────────────────────
     "TASA_FRAUDE_MCC",
+    # ── S: Moneda / divisa ────────────────────────────────────────────────────
+    "ES_RECURRENTE",
+    "MONEDA_TRX_COD", "MONEDA_TRX_TEXTO", "FLAG_MONEDA_INUSUAL",
+    "FLAG_TRX_EN_DOLAR", "FLAG_MONEDA_OTRA",
+    "FLAG_CAMBIO_MONEDA_CLI", "FLAG_AGOTAMIENTO_MONEDA_EXT",
 ]
 
 print("\n" + "─" * 65)
