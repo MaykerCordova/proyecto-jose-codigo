@@ -75,34 +75,76 @@ df[col_monto] = pd.to_numeric(df[col_monto], errors="coerce")
 # 2. SELECCIÓN DE VARIABLES PARA CLUSTERING
 # ─────────────────────────────────────────────────────────────────────────────
 VARS_CANDIDATAS = [
-    # Velocidad
-    "TRX_CLIENTE_5MIN", "TRX_CLIENTE_10MIN", "TRX_CLIENTE_1H", "TRX_CLIENTE_24H",
-    "GAP_MINUTOS",
-    # Monto
-    "ZSCORE_MONTO_COMERCIO", "ZSCORE_MONTO_CLIENTE", "DECIL_MONTO",
-    "ACELERACION_MONTO", "CONCENTRACION_5MIN_1H",
-    # Nuevas variables de vínculos
-    "ZSCORE_MONTO_CLI_COMERCIO", "N_FRAUDES_CLIENTE_PERIODO",
-    # Flags binarios — cliente
-    "FLAG_RAFAGA_5MIN", "FLAG_VEL_ALTA_1H",
-    "FLAG_MONTO_REDONDO", "FLAG_HORA_FUERA_PERFIL_COMERCIO",
-    "TIENE_FRAUDE_PREVIO_PERIODO", "HUBO_CVV_FAIL_PREVIO",
-    "HUBO_FRAUDE_PREVIO_24H", "FLAG_PRIMERA_TRX_Y_DENEGADA",
-    # Flags binarios — BIN (card testing y generación robótica)
-    "FLAG_BIN10_REPETIDO_DIA", "FLAG_BIN11_REPETIDO_DIA",
-    "FLAG_BIN12_REPETIDO_DIA", "FLAG_MONTO_ROBOTICO_BIN",
-    "FLAG_VEN_CONCENTRADA_BIN", "FLAG_CLIENTES_BIN_ALTO",
+
+    # ── VELOCIDAD DEL CLIENTE (ventanas representativas, no todas) ────────────
+    # No incluir 2MIN ni 10MIN: son redundantes con 5MIN y 1H respectivamente.
+    # Incluir 5MIN (ráfaga corta), 1H (velocidad media) y 24H (volumen diario).
+    "TRX_CLIENTE_5MIN",         # ráfaga corta — fraude de bot
+    "TRX_CLIENTE_1H",           # velocidad media — ataque en hora
+    "TRX_CLIENTE_24H",          # volumen diario — cliente vs. atacante
+    "GAP_MINUTOS",              # tiempo entre txn — fraude ≈ 0 min
+
+    # ── MONTO ACUMULADO DEL CLIENTE ───────────────────────────────────────────
+    # Absolutas (S/): capturan el daño monetario real
+    "MNT_CLIENTE_1H",           # S/ acumulados en 1h — nuevo, faltaba
+    "MNT_CLIENTE_24H",          # S/ acumulados en 24h — nuevo, faltaba
+    # Relativas: capturan el patrón de escalada
+    "ACELERACION_MONTO",        # MNT_5MIN / MNT_1H — si sube = ataque escalando
+    "CONCENTRACION_5MIN_1H",    # % del monto de la hora gastado en 5 min
+
+    # ── SEÑALES DE MONTO ──────────────────────────────────────────────────────
+    "ZSCORE_MONTO_COMERCIO",    # cuánto se desvía vs. el promedio del comercio
+    "ZSCORE_MONTO_CLIENTE",     # cuánto se desvía vs. el historial del cliente
+    "ZSCORE_MONTO_CLI_COMERCIO",# cuánto se desvía vs. el historial cliente×comercio
+    "DECIL_MONTO",              # posición en el rango de montos del dataset
+    "RATIO_MONTO_VS_HIST_CLIENTE", # monto actual / promedio histórico del cliente
+
+    # ── PERFIL DEL CLIENTE ────────────────────────────────────────────────────
+    "N_FRAUDES_CLIENTE_PERIODO",# fraudes acumulados del cliente en el período
+    "DIAS_ACTIVO",              # antigüedad del cliente — nuevo poco activo = riesgo
+    "FLAG_SALDO_AGOTADO",       # saldo ≥ 90% gastado — nuevo, señal fuerte
+    "ES_TOKENIZADA",            # billetera digital — patrón de fraude diferente
+    "ES_RECURRENTE",            # cargo automático — patrón suscripción trampa
+
+    # ── FLAGS BINARIOS — CLIENTE ──────────────────────────────────────────────
+    "FLAG_RAFAGA_5MIN",
+    "FLAG_VEL_ALTA_1H",
+    "FLAG_MONTO_REDONDO",
+    "FLAG_HORA_FUERA_PERFIL_COMERCIO",
+    "TIENE_FRAUDE_PREVIO_PERIODO",
+    "HUBO_CVV_FAIL_PREVIO",
+    "HUBO_FRAUDE_PREVIO_24H",
+    "FLAG_PRIMERA_TRX_Y_DENEGADA",
+
+    # ── VELOCIDAD POR BIN ─────────────────────────────────────────────────────
+    "TRX_BIN_1H",               # txn del BIN en la última hora
+    "TRX_BIN_24H",              # txn del BIN en 24h — nuevo, faltaba
+    "MNT_BIN_24H",              # S/ del BIN en 24h — nuevo, faltaba
+    "CLIENTES_BIN_DIA",         # clientes distintos del BIN en el día
+    "CV_MONTO_BIN_DIA",         # coeficiente de variación — 0 = monto robótico
+
+    # ── FLAGS BINARIOS — BIN ──────────────────────────────────────────────────
+    "FLAG_BIN10_REPETIDO_DIA",
+    "FLAG_BIN11_REPETIDO_DIA",
+    "FLAG_BIN12_REPETIDO_DIA",
+    "FLAG_MONTO_ROBOTICO_BIN",
+    "FLAG_VEN_CONCENTRADA_BIN",
+    "FLAG_CLIENTES_BIN_ALTO",
     "FLAG_RAFAGA_BIN_1H",
-    # Velocidad BIN
-    "TRX_BIN_1H", "CLIENTES_BIN_DIA", "CV_MONTO_BIN_DIA",
-    # Score
-    "SCORE_RIESGO", "SCORE_MON_NORM",
-    # Hora y contexto
-    "HORA_DIA", "ES_FIN_SEMANA", "ES_MADRUGADA",
-    # Moneda / divisa (Bloque S) — flags numéricos, texto queda fuera
-    "FLAG_MONEDA_INUSUAL", "FLAG_TRX_EN_DOLAR",
-    "FLAG_MONEDA_OTRA", "FLAG_CAMBIO_MONEDA_CLI",
-    "ES_RECURRENTE",
+
+    # ── SCORE Y CONTEXTO ──────────────────────────────────────────────────────
+    "SCORE_RIESGO",             # score compuesto 0-11 (Bloque L)
+    "SCORE_MON_NORM",           # score Monitor normalizado 0-1 (solo TC)
+    "HORA_DIA",
+    "ES_FIN_SEMANA",
+    "ES_MADRUGADA",
+
+    # ── MONEDA / DIVISA (Bloque S) ────────────────────────────────────────────
+    # Solo flags numéricos — MONEDA_TRX_TEXTO (texto) queda fuera del IF
+    "FLAG_MONEDA_INUSUAL",      # ni soles ni dólares
+    "FLAG_TRX_EN_DOLAR",        # txn en USD
+    "FLAG_MONEDA_OTRA",         # tercera moneda (EUR, GBP, etc.)
+    "FLAG_CAMBIO_MONEDA_CLI",   # cliente cambia de moneda habitual
 ]
 
 VARS_ML = [v for v in VARS_CANDIDATAS if v in df.columns]
