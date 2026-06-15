@@ -99,6 +99,10 @@ VARS_CANDIDATAS = [
     "SCORE_RIESGO", "SCORE_MON_NORM",
     # Hora y contexto
     "HORA_DIA", "ES_FIN_SEMANA", "ES_MADRUGADA",
+    # Moneda / divisa (Bloque S) — flags numéricos, texto queda fuera
+    "FLAG_MONEDA_INUSUAL", "FLAG_TRX_EN_DOLAR",
+    "FLAG_MONEDA_OTRA", "FLAG_CAMBIO_MONEDA_CLI",
+    "ES_RECURRENTE",
 ]
 
 VARS_ML = [v for v in VARS_CANDIDATAS if v in df.columns]
