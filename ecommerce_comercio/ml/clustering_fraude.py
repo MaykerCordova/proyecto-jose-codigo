@@ -2,12 +2,14 @@
 clustering_fraude.py — ML No Supervisado para Detección de Anomalías
 ──────────────────────────────────────────────────────────────────────
 Detecta patrones de fraude sin etiqueta usando:
-  - Isolation Forest  → ANOMALY_SCORE  (0-1, mayor = más anómalo)
-  - HDBSCAN           → CLUSTER_HDBSCAN (-1 = ruido/outlier)
+  - Isolation Forest  → ANOMALY_SCORE    (0-1, mayor = más anómalo)
+  - LOF               → LOF_SCORE        (0-1, mayor = más anómalo local)
+  - Consenso IF+LOF   → CONSENSUS_ANOMALY (1 = ambos marcan como anómalo)
+  - HDBSCAN           → CLUSTER_HDBSCAN  (-1 = ruido/outlier)
 
 Lee:  data/consolidado_features.parquet
 Escribe:
-  data/consolidado_features_ml.parquet   (parquet original + nuevas columnas)
+  data/consolidado_features_ml.parquet   (parquet original + nuevas columnas ML)
   ml/output/ml_resumen_{COMERCIO}.xlsx   (resumen de clusters)
 
 Ejecutar:
@@ -40,15 +42,20 @@ PARQUET_ML_OUT = _BASE_DIR / "data" / "consolidado_features_ml.parquet"
 EXCEL_ML_OUT   = _SCRIPT_DIR / "output" / f"ml_resumen_{COMERCIO_NOMBRE}.xlsx"
 
 # ── Parámetros (ajustables) ────────────────────────────────────────────────────
-CONTAMINATION_IF  = 0.05   # Isolation Forest: fracción esperada de anomalías
+RANDOM_STATE      = 42     # semilla global — resultados reproducibles entre ejecuciones
+CONTAMINATION_IF  = 0.08   # IF: fracción esperada de anomalías (ligeramente sobre tasa real de fraude)
+N_ESTIMATORS_IF   = 200    # IF: número de árboles (más = más estable)
+N_NEIGHBORS_LOF   = 20     # LOF: vecinos a comparar (más = más suave, menos = más sensible)
+CONTAMINATION_LOF = 0.08   # LOF: fracción esperada de anomalías (igual que IF para comparar)
 MIN_CLUSTER_SIZE  = 30     # HDBSCAN: tamaño mínimo de cluster
 MIN_SAMPLES       = 5      # HDBSCAN: densidad mínima para considerar núcleo
-N_ESTIMATORS_IF   = 200    # Isolation Forest: número de árboles
 
 print("═" * 65)
 print(f"ML NO SUPERVISADO — {COMERCIO_NOMBRE}")
-print(f"  Isolation Forest (contamination={CONTAMINATION_IF})")
-print(f"  HDBSCAN (min_cluster_size={MIN_CLUSTER_SIZE})")
+print(f"  Isolation Forest (contamination={CONTAMINATION_IF}, n_estimators={N_ESTIMATORS_IF})")
+print(f"  LOF              (n_neighbors={N_NEIGHBORS_LOF}, contamination={CONTAMINATION_LOF})")
+print(f"  HDBSCAN          (min_cluster_size={MIN_CLUSTER_SIZE})")
+print(f"  Semilla global   : {RANDOM_STATE}")
 print("═" * 65)
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -192,7 +199,7 @@ try:
     iforest = IsolationForest(
         n_estimators=N_ESTIMATORS_IF,
         contamination=CONTAMINATION_IF,
-        random_state=42,
+        random_state=RANDOM_STATE,
         n_jobs=-1,
     )
     iforest.fit(X_scaled)
@@ -222,7 +229,66 @@ except ImportError:
     HAS_IF = False
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 6. HDBSCAN
+# 6. LOCAL OUTLIER FACTOR (LOF)
+# ─────────────────────────────────────────────────────────────────────────────
+# LOF compara cada punto con sus N vecinos más cercanos.
+# Complementa al IF: IF detecta anómalos globales, LOF detecta anómalos locales.
+# Ej: una ráfaga de 22 txn del mismo BIN en un día normal de 4 → alta densidad
+# local anómala → LOF lo marca aunque el monto sea "normal" en términos globales.
+print("\n[LOF] Local Outlier Factor...")
+try:
+    from sklearn.neighbors import LocalOutlierFactor
+    lof = LocalOutlierFactor(
+        n_neighbors=N_NEIGHBORS_LOF,
+        contamination=CONTAMINATION_LOF,
+        novelty=False,   # fit_predict directo sobre el mismo dataset
+        n_jobs=-1,
+    )
+    lof_pred = lof.fit_predict(X_scaled)          # -1 = anómalo, 1 = normal
+    lof_raw  = -lof.negative_outlier_factor_      # invertir: mayor = más anómalo
+
+    # Normalizar a [0,1]
+    lof_min, lof_max = lof_raw.min(), lof_raw.max()
+    df["LOF_SCORE"]       = ((lof_raw - lof_min) / (lof_max - lof_min + 1e-9)).round(4)
+    df["FLAG_ANOMALIA_LOF"] = (lof_pred == -1).astype(int)
+
+    n_lof     = int(df["FLAG_ANOMALIA_LOF"].sum())
+    pct_lof   = round(n_lof / len(df) * 100, 2)
+    print(f"  Anomalías LOF detectadas: {n_lof:,} ({pct_lof}%)")
+    if has_ind:
+        coincid_lof = int(((df["FLAG_ANOMALIA_LOF"] == 1) & (df[col_ind] == "F")).sum())
+        pct_cl      = round(coincid_lof / n_fraudes * 100, 2) if n_fraudes > 0 else 0
+        print(f"  Coincidencia con fraudes etiquetados: {coincid_lof:,} ({pct_cl}%)")
+    HAS_LOF = True
+
+except ImportError:
+    print("  ⚠ scikit-learn no instalado. pip install scikit-learn")
+    df["LOF_SCORE"]       = np.nan
+    df["FLAG_ANOMALIA_LOF"] = 0
+    HAS_LOF = False
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 7. CONSENSO IF + LOF
+# ─────────────────────────────────────────────────────────────────────────────
+# Transacciones donde AMBOS algoritmos coinciden = máxima confianza.
+# IF ve lo raro globalmente, LOF ve lo raro localmente.
+# Si los dos acuerdan → candidato directo a regla de bloqueo.
+if HAS_IF and HAS_LOF:
+    df["CONSENSUS_ANOMALY"] = (
+        (df["FLAG_ANOMALIA_IF"] == 1) & (df["FLAG_ANOMALIA_LOF"] == 1)
+    ).astype(int)
+    n_con   = int(df["CONSENSUS_ANOMALY"].sum())
+    pct_con = round(n_con / len(df) * 100, 2)
+    print(f"\n[CONSENSO] IF AND LOF: {n_con:,} txn ({pct_con}%)")
+    if has_ind:
+        coincid_c = int(((df["CONSENSUS_ANOMALY"] == 1) & (df[col_ind] == "F")).sum())
+        pct_cc    = round(coincid_c / n_fraudes * 100, 2) if n_fraudes > 0 else 0
+        print(f"  Coincidencia con fraudes etiquetados: {coincid_c:,} ({pct_cc}%)")
+else:
+    df["CONSENSUS_ANOMALY"] = df.get("FLAG_ANOMALIA_IF", pd.Series(0, index=df.index))
+
+# ─────────────────────────────────────────────────────────────────────────────
+# 8. HDBSCAN
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n[HDBSCAN] Clustering...")
 try:
@@ -247,15 +313,19 @@ except ImportError:
     HAS_HDBSCAN = False
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 7. GUARDAR PARQUET
+# 9. GUARDAR PARQUET
 # ─────────────────────────────────────────────────────────────────────────────
 PARQUET_ML_OUT.parent.mkdir(parents=True, exist_ok=True)
 df.to_parquet(PARQUET_ML_OUT, index=False)
 print(f"\n✅ Parquet guardado: {PARQUET_ML_OUT}")
-print(f"   Columnas nuevas: ANOMALY_SCORE, FLAG_ANOMALIA_IF, CLUSTER_HDBSCAN")
+nuevas_cols = [c for c in ["ANOMALY_SCORE", "FLAG_ANOMALIA_IF",
+                            "LOF_SCORE", "FLAG_ANOMALIA_LOF",
+                            "CONSENSUS_ANOMALY", "CLUSTER_HDBSCAN"]
+               if c in df.columns]
+print(f"   Columnas nuevas: {', '.join(nuevas_cols)}")
 
 # ─────────────────────────────────────────────────────────────────────────────
-# 8. EXCEL RESUMEN DE CLUSTERS
+# 10. EXCEL RESUMEN DE CLUSTERS
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n[Excel] Generando resumen de clusters...")
 
@@ -350,7 +420,55 @@ try:
             fa = _escribir_df(ws, _top_anom, fa)
         _autofit(ws)
 
-        # ── Hoja 2: Resumen HDBSCAN ───────────────────────────────────────
+        # ── Hoja 2: LOF vs IF — comparación ─────────────────────────────
+        sn_lof = "LOF_vs_IF"
+        ws_lof = writer.book.create_sheet(sn_lof)
+        writer.sheets[sn_lof] = ws_lof
+        fa_lof = 1
+        ws_lof.merge_cells(start_row=fa_lof, start_column=1, end_row=fa_lof, end_column=8)
+        c_lof = ws_lof.cell(row=fa_lof, column=1,
+            value=f"LOF vs IF — COMPARACIÓN — {COMERCIO_NOMBRE}")
+        c_lof.fill = FH; c_lof.font = fH; c_lof.alignment = AC; c_lof.border = BT; fa_lof += 1
+
+        ws_lof.merge_cells(start_row=fa_lof, start_column=1, end_row=fa_lof, end_column=8)
+        n_con_val = int(df.get("CONSENSUS_ANOMALY", pd.Series(0)).sum())
+        c_lof = ws_lof.cell(row=fa_lof, column=1,
+            value=f"IF: contamination={CONTAMINATION_IF} | LOF: n_neighbors={N_NEIGHBORS_LOF} | "
+                  f"Consenso (IF AND LOF): {n_con_val:,} txn")
+        c_lof.fill = FS; c_lof.font = fH; c_lof.alignment = AC; c_lof.border = BT; fa_lof += 2
+
+        if HAS_IF and HAS_LOF and has_ind:
+            rows_comp = []
+            for _ind_v in sorted(df[col_ind].unique()):
+                _sub_v = df[df[col_ind] == _ind_v]
+                rows_comp.append({
+                    "INDICADOR"          : _ind_v,
+                    "N"                  : len(_sub_v),
+                    "ANOMALY_SCORE_med"  : round(_sub_v["ANOMALY_SCORE"].median(), 4),
+                    "LOF_SCORE_med"      : round(_sub_v["LOF_SCORE"].median(), 4),
+                    "IF_anomalia_%"      : round((_sub_v["FLAG_ANOMALIA_IF"]==1).mean()*100, 2),
+                    "LOF_anomalia_%"     : round((_sub_v["FLAG_ANOMALIA_LOF"]==1).mean()*100, 2),
+                    "CONSENSO_%"         : round((_sub_v["CONSENSUS_ANOMALY"]==1).mean()*100, 2),
+                })
+            fa_lof = _escribir_df(ws_lof, pd.DataFrame(rows_comp), fa_lof)
+            fa_lof += 1
+
+            # Top 20 por consenso
+            ws_lof.merge_cells(start_row=fa_lof, start_column=1, end_row=fa_lof, end_column=8)
+            c_lof = ws_lof.cell(row=fa_lof, column=1,
+                value="TOP 20 TRANSACCIONES — CONSENSUS_ANOMALY (IF + LOF ambos las marcan)")
+            c_lof.fill = FH; c_lof.font = fH; c_lof.alignment = AC; c_lof.border = BT; fa_lof += 1
+            _cols_con = [c for c in [col_ind, col_monto, col_bin, col_cli,
+                                     "ANOMALY_SCORE", "LOF_SCORE", "CONSENSUS_ANOMALY",
+                                     "SCORE_RIESGO", "MARCA_TARJETA"]
+                         if c in df.columns]
+            _top_con = (df[df.get("CONSENSUS_ANOMALY", pd.Series(0, index=df.index)) == 1]
+                        .nlargest(20, "ANOMALY_SCORE")[_cols_con])
+            if not _top_con.empty:
+                fa_lof = _escribir_df(ws_lof, _top_con, fa_lof)
+        _autofit(ws_lof)
+
+        # ── Hoja 4: Resumen HDBSCAN ───────────────────────────────────────
         sn2 = "HDBSCAN_Clusters"
         ws2 = writer.book.create_sheet(sn2)
         writer.sheets[sn2] = ws2
@@ -394,7 +512,7 @@ try:
                 fa2 = _escribir_df(ws2, pd.DataFrame(_rows_cl), fa2)
         _autofit(ws2)
 
-        # ── Hoja 3: Variables usadas ──────────────────────────────────────
+        # ── Hoja 5: Variables usadas ──────────────────────────────────────
         sn3 = "Variables_ML"
         ws3 = writer.book.create_sheet(sn3)
         writer.sheets[sn3] = ws3
@@ -426,7 +544,9 @@ except ImportError as e:
 # ─────────────────────────────────────────────────────────────────────────────
 print("\n" + "─" * 65)
 print("COLUMNAS NUEVAS EN EL PARQUET:")
-for col_n in ["ANOMALY_SCORE", "FLAG_ANOMALIA_IF", "CLUSTER_HDBSCAN"]:
+for col_n in ["ANOMALY_SCORE", "FLAG_ANOMALIA_IF",
+              "LOF_SCORE", "FLAG_ANOMALIA_LOF",
+              "CONSENSUS_ANOMALY", "CLUSTER_HDBSCAN"]:
     present = col_n in df.columns
     print(f"  {'✅' if present else '——'}  {col_n}")
 print(f"\nTotal columnas: {df.shape[1]}")
