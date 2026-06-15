@@ -207,21 +207,24 @@ RANGOS_MONTO_RUBRO = {
 #  TABLAS DE REFERENCIA
 # =============================================================================
 
-# Organización — completar con los códigos reales de tu Monitor
-# Los códigos vienen como string tipo "000215" (leer siempre como texto)
+# Organización — códigos como string (siempre 6 dígitos con ceros a la izquierda)
 ORG_NOMBRE = {
-    # "000XXX": "Nombre",   ← reemplaza con los valores reales cuando los tengas
+    "000002": "CSF",
+    "000004": "CSF",
+    "000001": "SBP",          # TD
+    "000003": "SBP",          # TC
+    "000005": "TELEBANKIN",   # TC / UNIBANCA
 }
 
 # Segmento cliente
 SEG_NOMBRE = {
-    "30": "Polo Direccion",     "99": "Polo Direccion",
+    "30": "Beyond",             "99": "Polo Dirección",
     "31": "Premium",            "32": "Preferente",
-    "33": "Personal",           "34": "Estandar",
+    "33": "Personal",           "34": "Estándar",
     "5":  "Inst. Financieras",  "21": "Corporativo",
     "2":  "Mediano Empresas",   "15": "Sector Gobierno",
     "16": "Otras Instituciones",
-    "3":  "Pequenas Empresas",  "4":  "Negocios 2",
+    "3":  "Pequeñas Empresas",  "4":  "Negocios 2",
     "7":  "Negocios 3",         "8":  "Negocios 1",
     "13": "Microempresas",
 }
