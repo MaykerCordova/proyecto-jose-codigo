@@ -1218,6 +1218,143 @@ print(f"  Score promedio: {df['SCORE_RIESGO'].mean():.2f}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  BLOQUE T — RECURRENCIA Y SUSCRIPCIONES
+#  Detecta fraude en comercios de membresía mensual (Smart Fit, Apple Bill,
+#  Netflix, Spotify, etc.) donde el patrón normal es UN cobro cada ~30 días.
+#  El fraude aquí NO es por velocidad alta (TRX_5MIN≈0) sino por GAP anómalo:
+#    - GAP muy corto  → tarjeta probada / doble cobro
+#    - GAP muy largo  → reactivación de tarjeta robada / primera suscripción
+#    - Primer cobro en comercio recurrente → alto riesgo (cuenta nueva)
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n[T] Recurrencia y suscripciones...")
+
+# GAP en días (más legible que minutos para ciclos mensuales)
+df["GAP_DIAS"] = (df["GAP_MINUTOS"] / 1440).round(2)
+
+# ── Detección de ciclo mensual anómalo ───────────────────────────────────────
+# Solo aplica si ES_RECURRENTE=1 (cobro automático de membresía)
+_es_rec = df.get("ES_RECURRENTE", pd.Series(0, index=df.index)).fillna(0).astype(int)
+_gap_min = df["GAP_MINUTOS"].fillna(99999)
+_gap_dias = df["GAP_DIAS"].fillna(999)
+
+# Cobro demasiado pronto (< 20 días): suscripción mensual que ya se cobró
+# → puede ser doble cobro o tarjeta robada probada antes de que la cierren
+df["FLAG_COBRO_ADELANTADO"] = (
+    (_es_rec == 1) & (_gap_dias < 20) & (_gap_dias > 0)
+).astype(int)
+
+# Cobro demasiado tarde (> 45 días): skip de un mes, luego reaparece
+# → tarjeta recuperada por fraudster, o reactivación de cuenta dormida
+df["FLAG_COBRO_ATRASADO"] = (
+    (_es_rec == 1) & (_gap_dias > 45)
+).astype(int)
+
+# Gap muy corto en recurrente (< 2 horas): el patrón de fraude Smart Fit
+# Un cobro mensual que vuelve en minutos es imposible en lo legítimo
+df["FLAG_GAP_CORTO_RECURRENTE"] = (
+    (_es_rec == 1) & (_gap_min < 120)
+).astype(int)
+
+# Gap en la zona de mayor fraude según análisis (15-120 min): aplica a cualquier txn
+# No solo recurrente — cover también intentos manuales repetidos
+df["FLAG_GAP_ZONA_FRAUDE"] = (
+    _gap_min.between(15, 120)
+).astype(int)
+
+n_adelantado = int(df["FLAG_COBRO_ADELANTADO"].sum())
+n_atrasado   = int(df["FLAG_COBRO_ATRASADO"].sum())
+n_gap_corto  = int(df["FLAG_GAP_CORTO_RECURRENTE"].sum())
+n_zona       = int(df["FLAG_GAP_ZONA_FRAUDE"].sum())
+print(f"  FLAG_COBRO_ADELANTADO    : {n_adelantado:,}  (recurrente < 20 días)")
+print(f"  FLAG_COBRO_ATRASADO      : {n_atrasado:,}  (recurrente > 45 días)")
+print(f"  FLAG_GAP_CORTO_RECURRENTE: {n_gap_corto:,}  (recurrente < 2 horas)")
+print(f"  FLAG_GAP_ZONA_FRAUDE     : {n_zona:,}  (gap 15-120 min, zona de fraude)")
+
+# ── Primera transacción en este comercio ─────────────────────────────────────
+# ES_CLIENTE_NUEVO_COMERCIO ya existe (Bloque N).
+# Aquí agregamos la combinación específica de riesgo:
+# Primera txn + ES_RECURRENTE = nueva suscripción (riesgo alto en membresías)
+if "ES_CLIENTE_NUEVO_COMERCIO" in df.columns:
+    df["FLAG_NUEVA_SUSCRIPCION"] = (
+        (df["ES_CLIENTE_NUEVO_COMERCIO"] == 1) & (_es_rec == 1)
+    ).astype(int)
+else:
+    df["FLAG_NUEVA_SUSCRIPCION"] = 0
+
+# Primera txn + monto alto (> P90 del comercio) = riesgo de account takeover
+# Aplica a Apple.com, tiendas online de alto valor
+_monto_p90_com = df[col_monto].quantile(0.90)
+if "ES_CLIENTE_NUEVO_COMERCIO" in df.columns:
+    df["FLAG_PRIMERA_TRX_MONTO_ALTO"] = (
+        (df["ES_CLIENTE_NUEVO_COMERCIO"] == 1) &
+        (df[col_monto] >= _monto_p90_com)
+    ).astype(int)
+else:
+    df["FLAG_PRIMERA_TRX_MONTO_ALTO"] = 0
+
+print(f"  FLAG_NUEVA_SUSCRIPCION       : {df['FLAG_NUEVA_SUSCRIPCION'].sum():,}  (1ra txn + recurrente)")
+print(f"  FLAG_PRIMERA_TRX_MONTO_ALTO  : {df['FLAG_PRIMERA_TRX_MONTO_ALTO'].sum():,}  (1ra txn + monto ≥ P90 S/{_monto_p90_com:.2f})")
+
+# ── Doble cobro en el mismo comercio ─────────────────────────────────────────
+# Mismo cliente, mismo monto, mismo comercio en < 7 días → doble billing
+# Aplica tanto a suscripciones como a hardware (Apple.com cobrado dos veces)
+col_com = C.get("comercio", "")
+if col_com and col_com in df.columns:
+    _key_doble = df[col_cli].astype(str) + "|" + df[col_com].astype(str)
+    _monto_str = df[col_monto].round(2).astype(str)
+    _mask_gap_7d = _gap_dias < 7
+
+    # Agrupar: cliente+comercio con gap < 7 días y mismo monto
+    df["_KEY_DOBLE"] = _key_doble + "|" + _monto_str
+    _doble_counts = (
+        df[_mask_gap_7d]
+        .groupby("_KEY_DOBLE")["_KEY_DOBLE"]
+        .transform("count")
+        .reindex(df.index, fill_value=0)
+    )
+    df["FLAG_DOBLE_COBRO_COMERCIO"] = (
+        (_mask_gap_7d) & (_doble_counts >= 2)
+    ).astype(int)
+    df.drop(columns=["_KEY_DOBLE"], inplace=True)
+else:
+    df["FLAG_DOBLE_COBRO_COMERCIO"] = 0
+
+print(f"  FLAG_DOBLE_COBRO_COMERCIO    : {df['FLAG_DOBLE_COBRO_COMERCIO'].sum():,}  (mismo monto, mismo com, < 7 días)")
+
+# ── Frecuencia del cliente en este comercio ───────────────────────────────────
+# Cuántas veces aparece el cliente en este comercio en el período analizado
+# Para suscripciones: debería ser 1 por mes. Más de 3 en el período = anómalo.
+if col_com and col_com in df.columns:
+    _freq_cli_com = df.groupby([col_cli, col_com])[col_monto].transform("count")
+    df["FREQ_CLIENTE_COMERCIO"] = _freq_cli_com.fillna(1).astype(int)
+    df["FLAG_FREQ_INUSUAL_COM"] = (
+        (_es_rec == 1) & (df["FREQ_CLIENTE_COMERCIO"] > 3)
+    ).astype(int)
+    print(f"  FLAG_FREQ_INUSUAL_COM        : {df['FLAG_FREQ_INUSUAL_COM'].sum():,}  (recurrente con >3 cobros en el período)")
+else:
+    df["FREQ_CLIENTE_COMERCIO"] = 1
+    df["FLAG_FREQ_INUSUAL_COM"] = 0
+
+# ── Cambio de monto en suscripción ───────────────────────────────────────────
+# Si el cliente pagaba X/mes y de repente paga 3X → posible cambio de plan forzado
+# (account takeover que upgradea la suscripción)
+if col_com and col_com in df.columns and "MONTO_PROM_24H" in df.columns:
+    _monto_hist_cli_com = (
+        df.groupby([col_cli, col_com])[col_monto]
+        .transform(lambda x: x.expanding().mean().shift(1))
+    )
+    _ratio_vs_hist = (df[col_monto] / _monto_hist_cli_com.replace(0, np.nan))
+    df["FLAG_CAMBIO_MONTO_SUSCRIPCION"] = (
+        (_es_rec == 1) &
+        (_ratio_vs_hist > 2.0) &
+        (_monto_hist_cli_com.notna())
+    ).fillna(0).astype(int)
+    print(f"  FLAG_CAMBIO_MONTO_SUSCRIPCION: {df['FLAG_CAMBIO_MONTO_SUSCRIPCION'].sum():,}  (monto 2x+ vs histórico del cliente en el comercio)")
+else:
+    df["FLAG_CAMBIO_MONTO_SUSCRIPCION"] = 0
+
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  RESUMEN DE VARIABLES GENERADAS
 # ═══════════════════════════════════════════════════════════════════════════════
 VARS_GENERADAS = [
@@ -1277,6 +1414,18 @@ VARS_GENERADAS = [
     "MONEDA_TRX_COD", "MONEDA_TRX_TEXTO", "FLAG_MONEDA_INUSUAL",
     "FLAG_TRX_EN_DOLAR", "FLAG_MONEDA_OTRA",
     "FLAG_CAMBIO_MONEDA_CLI", "FLAG_AGOTAMIENTO_MONEDA_EXT",
+    # ── T: Recurrencia y suscripciones ───────────────────────────────────────
+    "GAP_DIAS",
+    "FLAG_COBRO_ADELANTADO",        # recurrente < 20 días → doble cobro / intento temprano
+    "FLAG_COBRO_ATRASADO",          # recurrente > 45 días → reactivación / cuenta dormida
+    "FLAG_GAP_CORTO_RECURRENTE",    # recurrente < 2 horas → imposible en legítimo
+    "FLAG_GAP_ZONA_FRAUDE",         # gap 15-120 min → zona de mayor concentración de fraude
+    "FLAG_NUEVA_SUSCRIPCION",       # primera txn + ES_RECURRENTE → riesgo de suscripción falsa
+    "FLAG_PRIMERA_TRX_MONTO_ALTO",  # primera txn + monto ≥ P90 → account takeover
+    "FLAG_DOBLE_COBRO_COMERCIO",    # mismo monto, mismo comercio, < 7 días
+    "FREQ_CLIENTE_COMERCIO",        # veces del cliente en este comercio en el período
+    "FLAG_FREQ_INUSUAL_COM",        # recurrente con > 3 cobros (deberían ser 1/mes)
+    "FLAG_CAMBIO_MONTO_SUSCRIPCION",# monto 2x+ vs histórico del cliente en el comercio
 ]
 
 print("\n" + "─" * 65)
