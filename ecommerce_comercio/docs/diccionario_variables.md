@@ -647,18 +647,22 @@ Estos flags se generan automáticamente desde los umbrales en `config.py → UMB
 ---
 
 ### `N_FRAUDES_CLIENTE_PERIODO`
-- **Qué es:** Cuántas transacciones marcadas como fraude tiene ese cliente en todo el período analizado
-- **Ejemplo:** `N_FRAUDES_CLIENTE_PERIODO = 3` → ese cliente tiene 3 fraudes confirmados en el dataset
-- **Interpretar:** Si es > 0, la tarjeta/cliente ha sido comprometida repetidamente y no fue bloqueada a tiempo. Cada fraude adicional es una falla en la gestión de bloqueos.
+- **Qué es:** Cuántas transacciones marcadas como fraude cometió ese cliente **cronológicamente antes** de la transacción actual en el período analizado
+- **Cálculo:** Ordenado por fecha, acumulado con `shift(1)` — la txn actual NO se cuenta en su propio historial. Así una txn F ve los fraudes anteriores del mismo cliente, no el suyo propio.
+- **Ejemplo:** Cliente con fraudes el 5-mar y el 20-abr. Una txn del 1-jun tendrá `N_FRAUDES_CLIENTE_PERIODO = 2`. La propia txn del 5-mar tendrá `N_FRAUDES_CLIENTE_PERIODO = 0` (no tenía antecedentes aún).
+- **Interpretar:** Si es > 0, la tarjeta/cliente ya tenía historial de fraude confirmado antes de esta txn — señal de que debió haberse bloqueado antes.
 - **Combinar con:** `FLAG_PRIMERA_TRX_Y_DENEGADA` — si tiene fraudes previos Y la primera txn del día fue denegada, es un patrón de reintento de fraude conocido.
+- **⚠️ Importante:** No confundir con `HUBO_FRAUDE_PREVIO_24H` (fraude en las últimas 24h de la misma sesión). Este flag abarca todo el período descargado.
 
 ---
 
 ### `TIENE_FRAUDE_PREVIO_PERIODO`
-- **Qué es:** Flag si el cliente tiene al menos 1 fraude previo en el período
-- **Valores:** `1` = tiene antecedente | `0` = sin antecedente
-- **Ejemplo:** Cliente con 2 fraudes marcados → `TIENE_FRAUDE_PREVIO_PERIODO = 1`
-- **Para la regla:** Alta precisión, bajo recall. El 100% de las txn con este flag pertenecen a tarjetas ya comprometidas.
+- **Qué es:** Flag binario — el cliente ya tenía al menos 1 fraude confirmado **antes** de esta transacción
+- **Valores:** `1` = tiene antecedente real previo | `0` = sin antecedente (puede ser el primer fraude)
+- **Ejemplo:** Si el cliente cometió fraude el 10-mar y ahora estamos en el 15-jun → `TIENE_FRAUDE_PREVIO_PERIODO = 1`. Pero la propia txn del 10-mar tendrá `= 0` porque en ese momento aún no tenía historial.
+- **Por qué el capture% real es menor al 100%:** El primer fraude de cada cliente siempre tendrá este flag en 0 — es información genuinamente nueva. Solo los fraudes reincidentes (segunda F en adelante) lo tendrán en 1.
+- **Para la regla:** Identifica clientes reincidentes. Útil para escalar la prioridad de revisión cuando el indicador es N (todavía no confirmado como fraude, pero el cliente ya tiene historial).
+- **⚠️ Corrección aplicada (jun-2026):** Versión anterior usaba conteo total del período completo (data leakage — la txn F se contaba en su propio historial, causando 100% de capture ficticio). Versión actual usa acumulado cronológico con `shift(1)`.
 
 ---
 

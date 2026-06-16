@@ -486,14 +486,28 @@ print(f"  Primeras visitas a comercio: {df['ES_CLIENTE_NUEVO_COMERCIO'].sum():,}
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[N] Vínculos de cliente...")
 
-# Fraudes totales del cliente en TODO el dataset (no solo últimas 24h)
-fraudes_por_cli = (
-    df.groupby(col_cli)["ES_FRAUDE"].sum()
-    .reset_index()
-    .rename(columns={"ES_FRAUDE": "N_FRAUDES_CLIENTE_PERIODO"})
-)
-df = df.merge(fraudes_por_cli, on=col_cli, how="left")
-df["N_FRAUDES_CLIENTE_PERIODO"]   = df["N_FRAUDES_CLIENTE_PERIODO"].fillna(0).astype(int)
+# Fraudes ANTERIORES del cliente (cronológicamente antes de cada txn).
+# Se ordena por fecha y se hace expanding().sum().shift(1) para que cada txn
+# solo vea los fraudes que YA ocurrieron antes — sin incluirse a sí misma.
+# Esto evita data leakage: una txn F no se cuenta en su propio historial.
+col_fh_sort = C.get("fecha_hora", "")
+if col_fh_sort and col_fh_sort in df.columns:
+    df_sorted = df.sort_values([col_cli, col_fh_sort])
+    _fraudes_acum = (
+        df_sorted.groupby(col_cli)["ES_FRAUDE"]
+        .transform(lambda x: x.shift(1).expanding().sum())
+        .fillna(0)
+    )
+    df["N_FRAUDES_CLIENTE_PERIODO"]   = _fraudes_acum.reindex(df.index).fillna(0).astype(int)
+else:
+    # Sin columna de fecha: fallback al conteo total (menos preciso, pero no rompe)
+    fraudes_por_cli = (
+        df.groupby(col_cli)["ES_FRAUDE"].sum()
+        .reset_index()
+        .rename(columns={"ES_FRAUDE": "N_FRAUDES_CLIENTE_PERIODO"})
+    )
+    df = df.merge(fraudes_por_cli, on=col_cli, how="left")
+    df["N_FRAUDES_CLIENTE_PERIODO"] = df["N_FRAUDES_CLIENTE_PERIODO"].fillna(0).astype(int)
 df["TIENE_FRAUDE_PREVIO_PERIODO"] = (df["N_FRAUDES_CLIENTE_PERIODO"] > 0).astype(int)
 
 # Residente = cliente con historial (≥2 txn en el dataset)
