@@ -152,6 +152,19 @@ VARS_CANDIDATAS = [
     "FLAG_TRX_EN_DOLAR",        # txn en USD
     "FLAG_MONEDA_OTRA",         # tercera moneda (EUR, GBP, etc.)
     "FLAG_CAMBIO_MONEDA_CLI",   # cliente cambia de moneda habitual
+
+    # ── RECURRENCIA Y SUSCRIPCIONES (Bloque T) ────────────────────────────────
+    # Clave para Smart Fit, Apple Bill y comercios de membresía mensual.
+    # El fraude aquí no es velocidad alta sino GAP anómalo respecto al ciclo.
+    "FLAG_GAP_ZONA_FRAUDE",          # gap 15-120 min — zona con mayor tasa de fraude
+    "FLAG_GAP_CORTO_RECURRENTE",     # recurrente + gap < 2h — imposible en legítimo
+    "FLAG_COBRO_ADELANTADO",         # recurrente + gap < 20 días — doble cobro
+    "FLAG_COBRO_ATRASADO",           # recurrente + gap > 45 días — reactivación
+    "FLAG_NUEVA_SUSCRIPCION",        # primera txn + recurrente — suscripción nueva
+    "FLAG_PRIMERA_TRX_MONTO_ALTO",   # primera txn + monto ≥ P90 — account takeover
+    "FLAG_DOBLE_COBRO_COMERCIO",     # mismo monto, mismo comercio, < 7 días
+    "FLAG_FREQ_INUSUAL_COM",         # recurrente con > 3 cobros en el período
+    "FLAG_CAMBIO_MONTO_SUSCRIPCION", # monto 2x+ vs histórico cliente×comercio
 ]
 
 VARS_ML = [v for v in VARS_CANDIDATAS if v in df.columns]
