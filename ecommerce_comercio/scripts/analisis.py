@@ -694,14 +694,18 @@ if not df_deciles.empty:
     df_d10 = df[df[col_monto] >= umbral_d10].copy() if umbral_d10 is not None else pd.DataFrame()
     if len(df_d10) > 0:
         # Sub-bandas: P90-P95, P95-P97, P97-P99, P99+
-        cortes = [
+        # Deduplicar cortes: cuando muchas txn tienen el mismo monto, los
+        # cuantiles colapsan al mismo valor y pd.cut falla con bins duplicados.
+        cortes_raw = [
             df[col_monto].quantile(0.90),
             df[col_monto].quantile(0.95),
             df[col_monto].quantile(0.97),
             df[col_monto].quantile(0.99),
             df[col_monto].max() + 1,
         ]
-        etiquetas = ["P90-P95","P95-P97","P97-P99","P99-MAX"]
+        cortes = sorted(set(cortes_raw))
+        etiquetas_base = ["P90-P95","P95-P97","P97-P99","P99-MAX"]
+        etiquetas = etiquetas_base[: len(cortes) - 1]
         df_d10["_SUBBAND"] = pd.cut(df_d10[col_monto], bins=cortes,
                                      labels=etiquetas, include_lowest=True)
         rows_d10 = []
