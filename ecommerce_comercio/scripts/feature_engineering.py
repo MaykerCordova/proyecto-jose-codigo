@@ -1367,6 +1367,98 @@ if col_com and col_com in df.columns and "MONTO_PROM_24H" in df.columns:
 else:
     df["FLAG_CAMBIO_MONTO_SUSCRIPCION"] = 0
 
+# ── Catálogo de precios del comercio (automático, sin hardcodear) ─────────────
+# Extrae los montos más frecuentes del dataset → son los precios reales del comercio.
+# Para Smart Fit detecta: 9.90, 19.90, 29.90, 39.90, 99.90, 109.90, 119.90
+# Para Apple Bill detecta: 9.90, 14.90, 19.90, etc.
+# Para cualquier comercio de suscripción funciona sin configuración manual.
+print("\n[T.2] Catálogo de precios del comercio...")
+
+_montos_redond = df[col_monto].round(2)
+_top_precios   = _montos_redond.value_counts().head(8).index.tolist()  # top 8 más frecuentes
+_precio_base   = _top_precios[0] if _top_precios else df[col_monto].median()
+_precio_2do    = _top_precios[1] if len(_top_precios) > 1 else None
+
+print(f"  Precio base (más frecuente) : S/{_precio_base:.2f}")
+print(f"  Precio 2do más frecuente    : S/{_precio_2do:.2f}" if _precio_2do else "  (solo 1 precio frecuente)")
+print(f"  Catálogo completo           : {[round(p,2) for p in _top_precios]}")
+
+# FLAG_MONTO_PRECIO_CONOCIDO: monto está dentro del catálogo (±1%)
+def _en_catalogo(monto, catalogo, tol=0.01):
+    return any(abs(monto - p) / (p + 0.01) <= tol for p in catalogo)
+
+df["FLAG_MONTO_PRECIO_CONOCIDO"] = _montos_redond.apply(
+    lambda m: int(_en_catalogo(m, _top_precios))
+)
+
+# FLAG_MONTO_MULTIPLO_BASE: monto ≈ N × precio_base (N = 2..12)
+# Detecta pagos multi-mes: 3×119.90=359.70, 6×99.90=599.40, etc.
+_mejor_n   = pd.Series(0, index=df.index, dtype=int)
+_es_multip = pd.Series(False, index=df.index)
+for _n in range(2, 13):
+    _esperado = _precio_base * _n
+    _match    = ((_montos_redond - _esperado).abs() / _esperado) <= 0.015
+    _es_multip = _es_multip | _match
+    _mejor_n[_match] = _n
+
+df["FLAG_MONTO_MULTIPLO_BASE"] = _es_multip.astype(int)
+df["N_MESES_EQUIV"]            = _mejor_n.where(_es_multip, other=1)
+# Ajustar N_MESES_EQUIV para los precios del catálogo (1 mes)
+df.loc[df["FLAG_MONTO_PRECIO_CONOCIDO"] == 1, "N_MESES_EQUIV"] = 1
+
+# FLAG_POSIBLE_ADDON: monto entre precio_base y precio_base×1.5
+# → probablemente plan base + adicional (coach, balance, etc.)
+# No es el precio exacto, pero tampoco es un múltiplo — zona de add-ons
+df["FLAG_POSIBLE_ADDON"] = (
+    (_montos_redond > _precio_base * 1.02) &
+    (_montos_redond < _precio_base * 1.50) &
+    (df["FLAG_MONTO_PRECIO_CONOCIDO"] == 0) &
+    (df["FLAG_MONTO_MULTIPLO_BASE"] == 0)
+).astype(int)
+
+# FLAG_POSIBLE_MANTENIMIENTO: monto coincide con el 2do precio más frecuente
+# Para Smart Fit = S/99.90 (mantenimiento anual que clientes olvidan)
+if _precio_2do:
+    df["FLAG_POSIBLE_MANTENIMIENTO"] = (
+        ((_montos_redond - _precio_2do).abs() / (_precio_2do + 0.01)) <= 0.015
+    ).astype(int)
+else:
+    df["FLAG_POSIBLE_MANTENIMIENTO"] = 0
+
+# FLAG_MONTO_NO_EXPLICADO: recurrente Y monto no encaja en ningún patrón conocido
+# Estos son los candidatos reales a fraude (no card testing del precio conocido)
+df["FLAG_MONTO_NO_EXPLICADO"] = (
+    (_es_rec == 1) &
+    (df["FLAG_MONTO_PRECIO_CONOCIDO"] == 0) &
+    (df["FLAG_MONTO_MULTIPLO_BASE"]   == 0) &
+    (df["FLAG_POSIBLE_ADDON"]         == 0) &
+    (df["FLAG_POSIBLE_MANTENIMIENTO"] == 0)
+).astype(int)
+
+# ── Tipología de transacción de suscripción ──────────────────────────────────
+# Resume en una sola columna de texto qué tipo de cobro es (para Excel/análisis)
+_tipo = pd.Series("OTRO", index=df.index)
+_tipo[df["FLAG_POSIBLE_MANTENIMIENTO"] == 1]  = "MANTENIMIENTO_ANUAL"
+_tipo[df["FLAG_POSIBLE_ADDON"] == 1]          = "PLAN+ADICIONAL"
+_tipo[df["FLAG_MONTO_MULTIPLO_BASE"] == 1]    = _tipo[df["FLAG_MONTO_MULTIPLO_BASE"]==1].where(
+    False, other="MULTI_MES_" + df.loc[df["FLAG_MONTO_MULTIPLO_BASE"]==1, "N_MESES_EQUIV"].astype(str) + "M"
+)
+_tipo[df["FLAG_MONTO_PRECIO_CONOCIDO"] == 1]  = "PRECIO_BASE"
+_tipo[df["FLAG_MONTO_NO_EXPLICADO"] == 1]     = "MONTO_ANOMALO"
+df["TIPO_COBRO_SUSCRIPCION"] = _tipo
+
+n_conocido   = int(df["FLAG_MONTO_PRECIO_CONOCIDO"].sum())
+n_multiplo   = int(df["FLAG_MONTO_MULTIPLO_BASE"].sum())
+n_addon      = int(df["FLAG_POSIBLE_ADDON"].sum())
+n_mant       = int(df["FLAG_POSIBLE_MANTENIMIENTO"].sum())
+n_no_expl    = int(df["FLAG_MONTO_NO_EXPLICADO"].sum())
+print(f"  FLAG_MONTO_PRECIO_CONOCIDO : {n_conocido:,}  → precio del catálogo (1 mes)")
+print(f"  FLAG_MONTO_MULTIPLO_BASE   : {n_multiplo:,}  → pago multi-mes (2-12 meses)")
+print(f"  FLAG_POSIBLE_ADDON         : {n_addon:,}  → plan base + adicional")
+print(f"  FLAG_POSIBLE_MANTENIMIENTO : {n_mant:,}  → mantenimiento anual (disputa por confusión)")
+print(f"  FLAG_MONTO_NO_EXPLICADO    : {n_no_expl:,}  → no encaja en ningún patrón ← sospechoso")
+print(f"  TIPO_COBRO_SUSCRIPCION:\n{df['TIPO_COBRO_SUSCRIPCION'].value_counts().to_string()}")
+
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  RESUMEN DE VARIABLES GENERADAS
@@ -1440,6 +1532,14 @@ VARS_GENERADAS = [
     "FREQ_CLIENTE_COMERCIO",        # veces del cliente en este comercio en el período
     "FLAG_FREQ_INUSUAL_COM",        # recurrente con > 3 cobros (deberían ser 1/mes)
     "FLAG_CAMBIO_MONTO_SUSCRIPCION",# monto 2x+ vs histórico del cliente en el comercio
+    # ── T.2: Catálogo de precios ─────────────────────────────────────────────
+    "FLAG_MONTO_PRECIO_CONOCIDO",   # monto = precio del catálogo (1 mes normal)
+    "FLAG_MONTO_MULTIPLO_BASE",     # monto = N × precio base (pago multi-mes)
+    "N_MESES_EQUIV",                # cuántos meses equivale el monto
+    "FLAG_POSIBLE_ADDON",           # monto = plan base + adicional (coach, balance...)
+    "FLAG_POSIBLE_MANTENIMIENTO",   # monto = 2do precio más frecuente (mantenimiento anual)
+    "FLAG_MONTO_NO_EXPLICADO",      # recurrente y monto no encaja en ningún patrón ← fraude
+    "TIPO_COBRO_SUSCRIPCION",       # texto: PRECIO_BASE / MULTI_MES_3M / MONTO_ANOMALO / etc.
 ]
 
 print("\n" + "─" * 65)

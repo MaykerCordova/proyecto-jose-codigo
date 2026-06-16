@@ -165,6 +165,11 @@ VARS_CANDIDATAS = [
     "FLAG_DOBLE_COBRO_COMERCIO",     # mismo monto, mismo comercio, < 7 días
     "FLAG_FREQ_INUSUAL_COM",         # recurrente con > 3 cobros en el período
     "FLAG_CAMBIO_MONTO_SUSCRIPCION", # monto 2x+ vs histórico cliente×comercio
+    # ── T.2: Catálogo de precios ──────────────────────────────────────────────
+    "FLAG_MONTO_PRECIO_CONOCIDO",    # precio del catálogo → menos sospechoso
+    "FLAG_MONTO_MULTIPLO_BASE",      # multi-mes → puede ser legítimo
+    "FLAG_POSIBLE_ADDON",            # plan + adicional → zona gris
+    "FLAG_MONTO_NO_EXPLICADO",       # no encaja en ningún patrón → sospechoso
 ]
 
 VARS_ML = [v for v in VARS_CANDIDATAS if v in df.columns]
