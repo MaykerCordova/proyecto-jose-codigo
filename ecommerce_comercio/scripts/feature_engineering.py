@@ -1438,13 +1438,12 @@ df["FLAG_MONTO_NO_EXPLICADO"] = (
 # ── Tipología de transacción de suscripción ──────────────────────────────────
 # Resume en una sola columna de texto qué tipo de cobro es (para Excel/análisis)
 _tipo = pd.Series("OTRO", index=df.index)
-_tipo[df["FLAG_POSIBLE_MANTENIMIENTO"] == 1]  = "MANTENIMIENTO_ANUAL"
-_tipo[df["FLAG_POSIBLE_ADDON"] == 1]          = "PLAN+ADICIONAL"
-_tipo[df["FLAG_MONTO_MULTIPLO_BASE"] == 1]    = _tipo[df["FLAG_MONTO_MULTIPLO_BASE"]==1].where(
-    False, other="MULTI_MES_" + df.loc[df["FLAG_MONTO_MULTIPLO_BASE"]==1, "N_MESES_EQUIV"].astype(str) + "M"
-)
-_tipo[df["FLAG_MONTO_PRECIO_CONOCIDO"] == 1]  = "PRECIO_BASE"
-_tipo[df["FLAG_MONTO_NO_EXPLICADO"] == 1]     = "MONTO_ANOMALO"
+_tipo[df["FLAG_POSIBLE_MANTENIMIENTO"] == 1] = "MANTENIMIENTO_ANUAL"
+_tipo[df["FLAG_POSIBLE_ADDON"] == 1]         = "PLAN+ADICIONAL"
+_mask_multi = df["FLAG_MONTO_MULTIPLO_BASE"] == 1
+_tipo[_mask_multi] = ("MULTI_MES_" + df.loc[_mask_multi, "N_MESES_EQUIV"].astype(str) + "M")
+_tipo[df["FLAG_MONTO_PRECIO_CONOCIDO"] == 1] = "PRECIO_BASE"
+_tipo[df["FLAG_MONTO_NO_EXPLICADO"] == 1]    = "MONTO_ANOMALO"
 df["TIPO_COBRO_SUSCRIPCION"] = _tipo
 
 n_conocido   = int(df["FLAG_MONTO_PRECIO_CONOCIDO"].sum())
