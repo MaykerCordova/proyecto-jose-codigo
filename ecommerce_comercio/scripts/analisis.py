@@ -28,6 +28,8 @@ Hojas:
   21_Score_Marca        Score Monitor por marca (Visa 0-99, MC 0-999) — solo TC
   22_Vinculos_Cliente   Reincidencia, primera txn denegada, zscore monto×comercio
   23_Reglas_Combinadas  Pares de flags + segmentadores: captura vs afectación real
+  24_Suscripciones      Catálogo de precios auto-detectado + TIPO_COBRO × fraude + flags de suscripción
+                        (solo aparece si se corrió Bloque T.2 en feature_engineering.py)
 """
 
 import sys
@@ -1294,8 +1296,112 @@ else:
     print("  Sin datos de indicador — omitiendo combinaciones")
 
 
+# ── Hoja 24: Suscripciones y catálogo de precios ─────────────────────────────
+print("[24] Catálogo de precios y análisis de suscripciones...")
+
+_HAS_SUSCRIPCION = "TIPO_COBRO_SUSCRIPCION" in df.columns
+
+df_sus_catalogo   = pd.DataFrame()
+df_sus_tipo_ind   = pd.DataFrame()
+df_sus_flags_efec = pd.DataFrame()
+df_sus_anomalos   = pd.DataFrame()
+_precio_base_sus  = None
+
+if _HAS_SUSCRIPCION:
+    # A. Catálogo de precios detectado
+    _top_precios = df[col_monto].round(2).value_counts().head(8)
+    _precio_base_sus = float(_top_precios.index[0])
+    _precio_2do_sus  = float(_top_precios.index[1]) if len(_top_precios) > 1 else None
+    _rows_cat = []
+    for precio, n_total in _top_precios.items():
+        _sub = df[df[col_monto].round(2) == precio]
+        n_f  = int((_sub[col_ind] == "F").sum()) if has_ind else 0
+        tasa = round(n_f / n_total * 100, 2) if n_total > 0 else 0
+        _rows_cat.append({
+            "Precio_S/": precio,
+            "N_txn": n_total,
+            "N_fraude": n_f,
+            "Tasa_F%": tasa,
+        })
+    df_sus_catalogo = pd.DataFrame(_rows_cat)
+    print(f"  Precio base detectado: S/{_precio_base_sus}  |  2do precio: S/{_precio_2do_sus}")
+
+    # B. TIPO_COBRO_SUSCRIPCION × Indicador
+    if has_ind:
+        _pvt_sus = (
+            df.groupby(["TIPO_COBRO_SUSCRIPCION", col_ind])
+            .size()
+            .unstack(fill_value=0)
+        )
+        _pvt_sus["N_TOTAL"]  = _pvt_sus.sum(axis=1)
+        _pvt_sus["N_FRAUDE"] = _pvt_sus.get("F", 0)
+        _pvt_sus["TASA_F%"]  = (_pvt_sus["N_FRAUDE"] / _pvt_sus["N_TOTAL"] * 100).round(2)
+        _pvt_sus["MONTO_PROM"] = df.groupby("TIPO_COBRO_SUSCRIPCION")[col_monto].mean().round(2)
+        df_sus_tipo_ind = _pvt_sus.reset_index().sort_values("TASA_F%", ascending=False)
+
+    # C. Efectividad de flags de suscripción
+    _FLAGS_SUS = [c for c in [
+        "FLAG_GAP_ZONA_FRAUDE", "FLAG_GAP_CORTO_RECURRENTE", "FLAG_COBRO_ADELANTADO",
+        "FLAG_COBRO_ATRASADO", "FLAG_NUEVA_SUSCRIPCION", "FLAG_PRIMERA_TRX_MONTO_ALTO",
+        "FLAG_DOBLE_COBRO_COMERCIO", "FLAG_FREQ_INUSUAL_COM", "FLAG_CAMBIO_MONTO_SUSCRIPCION",
+        "FLAG_MONTO_NO_EXPLICADO", "FLAG_MONTO_PRECIO_CONOCIDO", "FLAG_MONTO_MULTIPLO_BASE",
+        "FLAG_POSIBLE_ADDON", "FLAG_POSIBLE_MANTENIMIENTO",
+    ] if c in df.columns]
+
+    if has_ind and _FLAGS_SUS:
+        _rows_efec = []
+        for flag in _FLAGS_SUS:
+            _activos = df[df[flag] == 1]
+            _n_act = len(_activos)
+            if _n_act == 0:
+                continue
+            _n_f  = int((_activos[col_ind] == "F").sum())
+            _n_nof = _n_act - _n_f
+            _rows_efec.append({
+                "FLAG": flag,
+                "N_Activaciones": _n_act,
+                "N_Fraude": _n_f,
+                "Precision%": round(_n_f / _n_act * 100, 2),
+                "Pct_fraude_capturado%": round(_n_f / max(n_fraudes, 1) * 100, 2),
+                "Ratio_F_vs_noFraude": round(_n_f / max(_n_nof, 1), 3),
+            })
+        if _rows_efec:
+            df_sus_flags_efec = (
+                pd.DataFrame(_rows_efec)
+                .sort_values("Precision%", ascending=False)
+                .reset_index(drop=True)
+            )
+            df_sus_flags_efec.index += 1
+
+    # D. Montos anómalos (MONTO_NO_EXPLICADO)
+    if "FLAG_MONTO_NO_EXPLICADO" in df.columns and has_ind:
+        _df_anom = df[df["FLAG_MONTO_NO_EXPLICADO"] == 1].copy()
+        if not _df_anom.empty:
+            _anom_grp = (
+                _df_anom.assign(_monto_r=_df_anom[col_monto].round(0))
+                .groupby("_monto_r")
+                .agg(
+                    N_txn=(col_monto, "count"),
+                    N_fraude=(col_ind, lambda x: (x == "F").sum()),
+                )
+                .reset_index()
+                .rename(columns={"_monto_r": "Monto_aprox"})
+            )
+            _anom_grp["Tasa_F%"] = (_anom_grp["N_fraude"] / _anom_grp["N_txn"] * 100).round(2)
+            df_sus_anomalos = (
+                _anom_grp.sort_values("N_txn", ascending=False)
+                .head(20)
+                .reset_index(drop=True)
+            )
+            df_sus_anomalos.index += 1
+
+    print(f"  Flags de suscripción evaluados: {len(_FLAGS_SUS)}")
+else:
+    print("  Sin columnas de suscripción — omitiendo hoja 24")
+
+
 # ─────────────────────────────────────────────────────────────────────────────
-# 4. EXPORTAR EXCEL (23 hojas)
+# 4. EXPORTAR EXCEL (24 hojas)
 # ─────────────────────────────────────────────────────────────────────────────
 EXCEL_OUTPUT.parent.mkdir(parents=True, exist_ok=True)
 hoy  = datetime.today().strftime("%d/%m/%Y %H:%M")
@@ -2056,6 +2162,65 @@ with pd.ExcelWriter(EXCEL_OUTPUT, engine="openpyxl") as writer:
             "minimizando el bloqueo de clientes legítimos.")
         t_autofit(ws)
 
+    # ── 24: Suscripciones y catálogo de precios ───────────────────────────────
+    if _HAS_SUSCRIPCION:
+        sn = "24_Suscripciones"
+        ws = writer.book.create_sheet(sn); writer.sheets[sn] = ws
+        fa = 1
+        t_titulo(ws, fa, 10,
+            f"ANÁLISIS DE SUSCRIPCIONES Y CATÁLOGO DE PRECIOS — {COMERCIO_NOMBRE}"); fa += 1
+        t_titulo(ws, fa, 10,
+            "Detección automática del catálogo de precios del comercio y clasificación de cada transacción",
+            fill=FS); fa += 2
+
+        if not df_sus_catalogo.empty:
+            nc = len(df_sus_catalogo.columns)
+            t_titulo(ws, fa, nc,
+                f"A. CATÁLOGO DE PRECIOS DETECTADO AUTOMÁTICAMENTE  |  Precio base: S/{_precio_base_sus}",
+                fill=FS); fa += 1
+            fa = escribir_df(ws, df_sus_catalogo, fa, reset_idx=True)
+            t_interp(ws, fa, nc,
+                f"Top 8 montos más frecuentes = catálogo de precios del comercio. "
+                f"Precio base (S/{_precio_base_sus}): precio de suscripción principal. "
+                f"Si TASA_F% es alta en el precio base: card testing (validación de tarjetas robadas con monto exacto). "
+                f"Montos con TASA_F% baja: pagos legítimos recurrentes de clientes establecidos."); fa += 2
+
+        if not df_sus_tipo_ind.empty:
+            nc = len(df_sus_tipo_ind.columns)
+            t_titulo(ws, fa, nc, "B. TIPO DE COBRO × INDICADOR DE FRAUDE", fill=FS); fa += 1
+            fa = escribir_df(ws, df_sus_tipo_ind, fa, reset_idx=True)
+            t_interp(ws, fa, nc,
+                "PRECIO_BASE: cobro estándar mensual. "
+                "MULTI_MES_NM: pago de N meses adelantados (3M = 3×precio_base). "
+                "MANTENIMIENTO_ANUAL: cuota anual (≈ 2do precio más frecuente). "
+                "PLAN+ADICIONAL: precio base + addon (coach, balance, etc.). "
+                "MONTO_ANOMALO: ES_RECURRENTE=1 pero no coincide con ningún patrón conocido → alta sospecha. "
+                "Si MONTO_ANOMALO tiene TASA_F% alta: fraude usa montos aleatorios para evadir reglas de monto exacto."); fa += 2
+
+        if not df_sus_flags_efec.empty:
+            nc = len(df_sus_flags_efec.columns)
+            t_titulo(ws, fa, nc,
+                "C. EFECTIVIDAD DE FLAGS DE SUSCRIPCIÓN COMO REGLAS DE CONTROL", fill=FS); fa += 1
+            fa = escribir_df(ws, df_sus_flags_efec, fa, reset_idx=False)
+            t_interp(ws, fa, nc,
+                "FLAG_GAP_ZONA_FRAUDE (15-120 min): patrón característico — fraudsters vuelven en minutos. "
+                "FLAG_MONTO_NO_EXPLICADO: monto recurrente que no es precio base, múltiplo, ni addon → anomalía. "
+                "FLAG_COBRO_ADELANTADO (<20 días): doble cobro accidental o ataque de replay. "
+                "FLAG_DOBLE_COBRO_COMERCIO: mismo monto, mismo comercio, gap <7 días → cobro duplicado. "
+                "Precision%>20% y Pct_capturado%>5%: candidato a regla de bloqueo o revisión."); fa += 2
+
+        if not df_sus_anomalos.empty:
+            nc = len(df_sus_anomalos.columns)
+            t_titulo(ws, fa, nc,
+                "D. DETALLE DE MONTOS ANÓMALOS (FLAG_MONTO_NO_EXPLICADO = 1)  |  Top 20", fill=FS); fa += 1
+            fa = escribir_df(ws, df_sus_anomalos, fa, reset_idx=False)
+            t_interp(ws, fa, nc,
+                "Montos de clientes recurrentes que no corresponden al catálogo del comercio. "
+                "Revisar si son cobros por error del comercio, redondeos de tipo de cambio, o fraude por importes aleatorios. "
+                "Si el mismo monto aparece con muchos BINs diferentes: probable ataque coordinado."); fa += 2
+
+        t_autofit(ws)
+
 
 # ─────────────────────────────────────────────────────────────────────────────
 # 5. RESUMEN FINAL
@@ -2076,4 +2241,6 @@ hojas = [
 ]
 for h in hojas:
     print(f"   ✅ {h}")
+if _HAS_SUSCRIPCION:
+    print("   ✅ 24_Suscripciones  ← catálogo de precios + TIPO_COBRO × fraude + flags T/T.2")
 print("═" * 65)
