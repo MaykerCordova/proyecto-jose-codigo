@@ -86,12 +86,12 @@ COLS = {
     # ── MONTOS ────────────────────────────────────────────────────────────────
     "monto"            : "ACF-MONTO EN MONEDA LOCAL",      # monto en soles (moneda local)
     "monto_dolar"      : "ACF-MONTO DOLLAR",               # equivalente en dólares
-    "monto_original"   : "ACF-MONTO ORIGINAL",             # monto en la moneda ORIGINAL de la txn
+    "monto_original"   : "ACF-MONTO ORIGINAL TRX",         # monto en la moneda ORIGINAL de la txn
                                                             # Lógica en feature_engineering Bloque S:
                                                             #   monto_original ≈ monto_dolar → txn en USD
                                                             #   monto_original ≈ monto       → txn en soles
                                                             #   ninguno de los dos            → otra moneda (sospechoso)
-    "moneda_trx"       : "ACF-MONEDA DE TRANSACCION",      # código ISO de moneda: 604=PEN 840=USD 978=EUR
+    "moneda_trx"       : "ACF-COD MONEDA TRX",              # código ISO de moneda: 604=PEN 840=USD 978=EUR
                                                             # Usada junto a saldo para detectar
                                                             # clientes que cambian de moneda de golpe
 
