@@ -870,6 +870,150 @@ Estos flags se generan automáticamente desde los umbrales en `config.py → UMB
 
 ---
 
+## BLOQUE T — RECURRENCIA Y SUSCRIPCIONES
+
+> Variables diseñadas para comercios con cobros recurrentes (gimnasios, streaming, apps).
+> Detectan patrones de fraude específicos: card testing, doble cobro, cargos fuera de ciclo.
+
+---
+
+### `GAP_DIAS`
+- **Qué es:** `GAP_MINUTOS / 1440` — tiempo en días entre la txn actual y la anterior del mismo cliente en este comercio
+- **Ejemplo:** GAP_DIAS = 30 → el cliente paga mensualmente (patrón legítimo)
+
+---
+
+### `FLAG_GAP_ZONA_FRAUDE`
+- **Qué es:** 1 si `GAP_MINUTOS` está entre 15 y 120 minutos
+- **Lógica:** El fraudster prueba una tarjeta, espera unos minutos y vuelve a intentar con otra. Ese rango es el "tiempo de reintento" característico del card testing.
+- **Por qué no <15min:** demasiado rápido incluso para un script automatizado que espera respuesta del banco
+- **Por qué no >120min:** empieza a parecerse a comportamiento legítimo
+- **En Smart Fit:** tasa de fraude 2.61% en bucket 15-60min vs 0.20% en >60min
+- **Usar para:** alerta o revisión manual — no bloqueo directo por sí solo
+
+---
+
+### `FLAG_GAP_CORTO_RECURRENTE`
+- **Qué es:** 1 si `ES_RECURRENTE = 1` Y `GAP_MINUTOS < 120`
+- **Lógica:** Un cargo recurrente legítimo ocurre cada 30 días. Si el mismo cliente tiene dos cargos recurrentes con menos de 2 horas de diferencia, es sospechoso.
+- **Casos típicos:** doble cobro por error del sistema, script de reintento del fraudster
+
+---
+
+### `FLAG_COBRO_ADELANTADO`
+- **Qué es:** 1 si `ES_RECURRENTE = 1` Y `GAP_DIAS < 20` Y `GAP_DIAS > 0`
+- **Lógica:** El cobro mensual llega antes de que hayan pasado 20 días desde el último → posible doble cobro o cobro adelantado
+- **En Smart Fit:** 4,702 activaciones — muchos clientes con cobros adelantados, puede ser error del comercio
+
+---
+
+### `FLAG_COBRO_ATRASADO`
+- **Qué es:** 1 si `ES_RECURRENTE = 1` Y `GAP_DIAS > 45`
+- **Lógica:** El cobro mensual llega después de 45 días → puede indicar cuenta pausada reactivada, o cliente que no pagó y se le cobra tarde
+
+---
+
+### `FLAG_NUEVA_SUSCRIPCION`
+- **Qué es:** 1 si `ES_CLIENTE_NUEVO_COMERCIO = 1` Y `ES_RECURRENTE = 1`
+- **Lógica:** Primera transacción del cliente en este comercio Y viene marcada como recurrente → nueva suscripción iniciada
+
+---
+
+### `FLAG_PRIMERA_TRX_MONTO_ALTO`
+- **Qué es:** 1 si `ES_CLIENTE_NUEVO_COMERCIO = 1` Y `monto >= P90`
+- **Lógica:** Primera visita del cliente al comercio con monto en el percentil 90 o más. En Smart Fit, P90 = S/119.90 (Plan Black, el más caro).
+- **¿Por qué es señal de card testing?** El fraudster elige el precio más alto del catálogo para hacer la validación más "definitiva" de la tarjeta robada. Un suscriptor legítimo nuevo puede elegir cualquier plan.
+- **En Smart Fit:** captura el 42% del fraude — el flag de mayor alcance del Bloque T
+
+---
+
+### `FLAG_DOBLE_COBRO_COMERCIO`
+- **Qué es:** 1 si el mismo cliente tiene dos txn con el mismo monto en el mismo comercio con menos de 7 días de diferencia
+- **Lógica:** Cobro duplicado — el cliente fue cargado dos veces por el mismo concepto
+
+---
+
+### `FLAG_FREQ_INUSUAL_COM`
+- **Qué es:** 1 si `ES_RECURRENTE = 1` Y `FREQ_CLIENTE_COMERCIO > 3`
+- **Lógica:** Cliente recurrente con más de 3 transacciones en el período → frecuencia inusual para una suscripción mensual
+
+---
+
+### `FLAG_CAMBIO_MONTO_SUSCRIPCION`
+- **Qué es:** 1 si `ES_RECURRENTE = 1` Y el monto actual es más del doble del monto histórico del cliente en ese comercio
+- **Lógica:** El plan subió de precio abruptamente o alguien cambió el monto del cargo sin autorización del cliente
+
+---
+
+## BLOQUE T.2 — CATÁLOGO DE PRECIOS (auto-detectado)
+
+> El script detecta automáticamente los 8 montos más frecuentes del comercio y los usa como "catálogo de precios". Funciona para cualquier comercio recurrente sin hardcodear precios.
+
+---
+
+### `FLAG_MONTO_PRECIO_CONOCIDO`
+- **Qué es:** 1 si el monto está dentro del 1% de alguno de los 8 precios del catálogo detectado
+- **En Smart Fit:** cubre S/119.90, S/109.90, S/99.90 y otros
+- **Uso:** identifica cobros que coinciden con precios oficiales del comercio
+
+---
+
+### `FLAG_MONTO_MULTIPLO_BASE`
+- **Qué es:** 1 si el monto está dentro del 1.5% de `N × precio_base` (N entre 2 y 12)
+- **Ejemplo:** S/359.70 = 3 × S/119.90 → `FLAG_MONTO_MULTIPLO_BASE = 1`, `N_MESES_EQUIV = 3`
+- **En Smart Fit:** Precision 16% — el flag más preciso del Bloque T.2
+- **Usar para:** revisión de disputas por cobros multi-mes que el cliente no recuerda haber autorizado
+
+---
+
+### `N_MESES_EQUIV`
+- **Qué es:** el N de meses que equivale el monto (2 a 12). Solo válido cuando `FLAG_MONTO_MULTIPLO_BASE = 1`
+- **Ejemplo:** monto S/239.80 → N_MESES_EQUIV = 2
+
+---
+
+### `FLAG_POSIBLE_ADDON`
+- **Qué es:** 1 si el monto está entre `precio_base × 1.02` y `precio_base × 1.50`
+- **Lógica:** Monto mayor que el precio base pero no un múltiplo — probablemente plan base + servicio adicional
+- **En Smart Fit:** Balance (+S/9.90), Coach (+S/39.90), Coach+Balance (+S/29.90)
+
+---
+
+### `FLAG_POSIBLE_MANTENIMIENTO`
+- **Qué es:** 1 si el monto está dentro del 1.5% del segundo precio más frecuente del catálogo
+- **En Smart Fit:** S/99.90 (cuota de mantenimiento anual) → 15,924 activaciones
+- **Usar para:** estos cobros generan disputas por confusión — el cliente paga S/99.90 anual y lo marca como fraude porque no lo espera
+
+---
+
+### `FLAG_MONTO_NO_EXPLICADO`
+- **Qué es:** 1 si `ES_RECURRENTE = 1` Y el monto no coincide con ningún patrón del catálogo (ni precio conocido, ni múltiplo, ni addon, ni mantenimiento)
+- **Lógica:** Cliente recurrente pagando un monto que no existe en el catálogo del comercio → anomalía
+- **En Smart Fit:** 6,645 txn con tasa de fraude 0.29% (similar al global) — los montos anómalos son en su mayoría planes promocionales no documentados, no fraude directo
+
+---
+
+### `TIPO_COBRO_SUSCRIPCION`
+- **Qué es:** Clasificación de cada transacción según el catálogo del comercio
+- **Valores posibles:**
+
+| Valor | Descripción |
+|---|---|
+| `PRECIO_BASE` | Coincide con el precio principal del catálogo (1 mes) |
+| `MULTI_MES_NM` | Pago de N meses adelantados (ej. MULTI_MES_3M = 3 × precio base) |
+| `PLAN+ADICIONAL` | Precio base + addon (servicios extra) |
+| `MANTENIMIENTO_ANUAL` | Cuota anual ≈ 2do precio más frecuente |
+| `MONTO_ANOMALO` | Recurrente pero no encaja en ningún patrón → revisar |
+| `OTRO` | No recurrente o caso no clasificado |
+
+- **En Smart Fit (jun 2026):**
+  - PRECIO_BASE: 42,395 (78%)
+  - MONTO_ANOMALO: 6,645 (12%) — tasa fraude 0.29%
+  - MANTENIMIENTO_ANUAL: 194 — tasa fraude 0.52%
+  - MULTI_MES_2M: 62 — tasa fraude 12.9% (volumen bajo pero alta tasa)
+
+---
+
 ## CÓMO INTERPRETAR EL ANÁLISIS COMPLETO PARA ESCRIBIR UNA REGLA
 
 ### Ejemplo de flujo de análisis:
