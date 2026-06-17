@@ -100,7 +100,7 @@ COLS = {
     "saldo"            : "ACF-SALDO DISPONIBLE EN MONEDA TRX",  # saldo en la moneda de la txn
                                                                   # → cruzar con moneda_trx para detectar
                                                                   #   agotamiento en moneda extranjera
-    "fecha_vencimiento": "ACF-FECHA VENCIMIENTO TARJETA",  # YYMM o MM/YY
+    "fecha_vencimiento": "ACF-V/TO",                        # Fecha de vencimiento de tarjeta (V/TO en Monitor)
                                                             # Vacíos / ceros → tratados como sin dato
                                                             # Bloque I: detecta tarjetas con misma fecha VEN
     "segmento"         : "VAA-EVENTO DE COMPROMISO OTRA FUENTE",
@@ -108,7 +108,7 @@ COLS = {
 
     # Marca: primer dígito del PAN → 4=Visa | 5=Mastercard
     # Monitor puede entregar una columna propia; si no, el script la infiere del PAN
-    "marca"            : "ACF-MARCA",
+    "marca"            : "ACF-MARCA O FRANQUICIA",  # 4=Visa | 5=Mastercard
 
     # ── COMERCIO / TRANSACCIÓN ────────────────────────────────────────────────
     "comercio_nom"     : "ACF-NOMBRE/LOCALIZACION COMERCIO",
@@ -118,7 +118,6 @@ COLS = {
     "mcc"              : "ACF-MCC +",                      # MCC con + (débito usa esta columna)
     "cod_cio"          : "ACF-CODIGO CIO/AGENCIA/OFICINA ORIGEN",
     "cod_trx"          : "ACF-COD TRX",                    # código de transacción (tipo de operación)
-    "v_to"             : "ACF-V/TO",                       # código de comercio (V/TO)
     "reverso"          : "ACF-REVERSO",                    # S/N si la txn fue reversada
                                                             # Baja relevancia directa en fraude:
                                                             # un reverso posterior al fraude no cambia el daño
