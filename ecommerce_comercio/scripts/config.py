@@ -116,7 +116,7 @@ COLS = {
     "canal"            : "ACF-CANAL",
     "entry_mode"       : "ACF-ENTRY MODE",                 # cómo ingresó la tarjeta → ver ENTRY_MODE_LABEL
     "mcc"              : "ACF-MCC +",                      # MCC con + (débito usa esta columna)
-    "cod_cio"          : "ACF-CODIGO CIO/AGENCIA/OFICINA ORIGEN",
+    "cod_cio"          : "ACF-CODIGO CIO/AGENCIA/OFICINA ORIGEN",  # código de comercio (CIO)
     "cod_trx"          : "ACF-COD TRX",                    # código de transacción (tipo de operación)
     "reverso"          : "ACF-REVERSO",                    # S/N si la txn fue reversada
                                                             # Baja relevancia directa en fraude:
