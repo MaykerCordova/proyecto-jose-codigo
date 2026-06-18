@@ -90,8 +90,11 @@ print(f"  Columnas      : {df.shape[1]}")
 
 # ─── DIAGNÓSTICO DE COLUMNAS ─────────────────────────────────────────────────
 
-cols_reales   = set(df.columns)
-cols_config   = {k: v for k, v in C.items() if v}
+# Columnas que el script CONSTRUYE — no vienen en el archivo, ignorarlas
+COLS_CONSTRUIDAS = {"fecha_hora"}
+
+cols_reales    = set(df.columns)
+cols_config    = {k: v for k, v in C.items() if v and k not in COLS_CONSTRUIDAS}
 cols_faltantes = {k: v for k, v in cols_config.items() if v not in cols_reales}
 
 if cols_faltantes:
