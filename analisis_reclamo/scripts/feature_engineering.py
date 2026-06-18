@@ -34,7 +34,8 @@ from config import (
     PERIODO_INICIO, PERIODO_FIN,
     MARCAR_PERIODO_GOOGLE, GOOGLE_INICIO, GOOGLE_FIN,
     UMBRAL_RECLAMO_TARDIO_DIAS, UMBRAL_RECLAMO_RAPIDO_DIAS,
-    SEG_NOMBRE, BILLETERA_LABEL, ENTRY_MODE_LABEL, ENTRY_MODE_PRESENTE,
+    UMBRAL_MICROPAGO_MONTO, PAISES_PERU,
+    ENTRY_MODE_LABEL, ENTRY_MODE_PRESENTE,
     MARCA_LABEL, TIPO_PROD_LABEL, FILTRO_MARCA,
 )
 
@@ -72,7 +73,7 @@ if faltantes:
         print(f"   COLS['{k}'] = '{v}'  ← no existe en parquet")
 
 # Castear montos
-for col_key in ["monto", "monto_dolar", "monto_original", "saldo"]:
+for col_key in ["monto", "monto_dolar", "monto_original"]:
     col_val = C.get(col_key, "")
     if col_val and col_val in df.columns:
         df[col_val] = (
@@ -178,26 +179,16 @@ print(f"  FRANJA_HORARIA:\n{df['FRANJA_HORARIA'].value_counts().to_string()}")
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[C] Clasificación de la transacción...")
 
-col_ind   = C.get("indicador", "")
-col_eci   = C.get("eci", "")
-col_marca = C.get("marca", "")
-col_bil   = C.get("billetera", "")
-col_em    = C.get("entry_mode", "")
-col_moto  = C.get("ind_recurrente", "")
-col_seg   = C.get("segmento", "")
-col_tp    = C.get("tipo_producto", "")
-col_cvvr  = C.get("cod_red_comercio", "")
-col_canal = C.get("canal", "")
-
-# Indicador de fraude (en reclamos normalmente es F o vacío)
-INDICADOR_LABEL = {"F": "Fraude", "G": "Buena", "P": "Pendiente", "D": "Descarte", "N": "Normal"}
-if col_ind and col_ind in df.columns:
-    df["INDICADOR_TEXTO"] = df[col_ind].astype(str).str.strip().map(INDICADOR_LABEL).fillna("Otro")
-    df["ES_FRAUDE_F"]     = (df[col_ind].astype(str).str.strip().str.upper() == "F").astype(int)
-    print(f"  Indicador F (fraude confirmado): {df['ES_FRAUDE_F'].sum():,} txn")
-else:
-    df["INDICADOR_TEXTO"] = "Sin dato"
-    df["ES_FRAUDE_F"]     = 1  # toda la base es fraude en reclamos
+col_eci       = C.get("eci", "")
+col_marca     = C.get("marca", "")
+col_em        = C.get("entry_mode", "")
+col_moto      = C.get("ind_recurrente", "")
+col_seg       = C.get("segmento", "")
+col_tp        = C.get("tipo_producto", "")
+col_cvvr      = C.get("cod_red_comercio", "")
+col_canal     = C.get("canal", "")
+col_adq       = C.get("tipo_adquiriente", "")
+col_micropago = C.get("tipo_micropago", "")
 
 # Marca de la tarjeta
 if col_marca and col_marca in df.columns:
@@ -218,17 +209,6 @@ if col_eci and col_eci in df.columns:
     df["ES_SEGURO_3DS"] = df[col_eci].astype(str).str.strip().isin(CODIGOS_SEGURO).astype(int)
 else:
     df["ES_SEGURO_3DS"] = 0
-
-# Billetera digital
-BILLETERA_DEFAULT = "No tokenizada"
-if col_bil and col_bil in df.columns:
-    df["_bil5"]            = df[col_bil].astype(str).str.strip().str[:5].str.upper()
-    df["ES_TOKENIZADA"]    = (df["_bil5"] != "99999").astype(int)
-    df["BILLETERA_NOMBRE"] = df["_bil5"].map(BILLETERA_LABEL).fillna(BILLETERA_DEFAULT)
-    df.drop(columns=["_bil5"], inplace=True)
-else:
-    df["ES_TOKENIZADA"]    = 0
-    df["BILLETERA_NOMBRE"] = "Sin dato"
 
 # Entry mode (modo de ingreso de tarjeta)
 if col_em and col_em in df.columns:
@@ -254,10 +234,9 @@ if col_cvvr and col_cvvr in df.columns:
 else:
     df["TIPO_CVV"] = "Sin dato"
 
-# Segmento del cliente
+# Segmento — viene como texto directamente, sin mapeo de diccionario
 if col_seg and col_seg in df.columns:
-    seg_s = df[col_seg].astype(str).str.strip().str.split(".").str[0]
-    df["SEG_NOMBRE"] = seg_s.map(SEG_NOMBRE).fillna("Otro/Sin seg")
+    df["SEG_NOMBRE"] = df[col_seg].astype(str).str.strip().replace("nan", "Sin dato")
 else:
     df["SEG_NOMBRE"] = "Sin dato"
 
@@ -277,19 +256,36 @@ else:
     df["ES_CANAL_FISICO"]  = df["ES_TARJETA_PRESENTE"]
     df["ES_CANAL_DIGITAL"] = (1 - df["ES_TARJETA_PRESENTE"])
 
-# País
+# País — viene como nombre completo (ej: "PERU", "ESTADOS UNIDOS")
 col_pais = C.get("pais", "")
 if col_pais and col_pais in df.columns:
     df["ES_INTERNACIONAL"] = (
-        df[col_pais].astype(str).str.strip().str.upper().isin({"PE", "PER", "604", ""}) == False
+        ~df[col_pais].astype(str).str.strip().str.upper().isin(PAISES_PERU)
     ).astype(int)
 else:
     df["ES_INTERNACIONAL"] = 0
 
-print(f"  MARCA_TARJETA    : {df['MARCA_TARJETA'].value_counts().to_dict()}")
+# Tipo adquiriente (Niubiz, Izipay, Culqi, etc.)
+if col_adq and col_adq in df.columns:
+    df["ADQUIRIENTE"] = df[col_adq].astype(str).str.strip().str.upper()
+    print(f"  ADQUIRIENTE: {df['ADQUIRIENTE'].value_counts().head(6).to_dict()}")
+else:
+    df["ADQUIRIENTE"] = "Sin dato"
+
+# Micropago — viene como texto: "MICROPAGO" | "NO MICROPAGO"
+if col_micropago and col_micropago in df.columns:
+    df["ES_MICROPAGO"] = (
+        df[col_micropago].astype(str).str.strip().str.upper() == "MICROPAGO"
+    ).astype(int)
+    print(f"  ES_MICROPAGO: {df['ES_MICROPAGO'].sum():,} txn ({df['ES_MICROPAGO'].mean()*100:.1f}%)")
+else:
+    # Derivar desde monto si no existe la columna
+    df["ES_MICROPAGO"] = (df[col_monto] <= UMBRAL_MICROPAGO_MONTO).astype(int)
+    print(f"  ES_MICROPAGO (derivado ≤S/{UMBRAL_MICROPAGO_MONTO}): {df['ES_MICROPAGO'].sum():,} txn")
+
+print(f"  MARCA_TARJETA      : {df['MARCA_TARJETA'].value_counts().to_dict()}")
 print(f"  ES_TARJETA_PRESENTE: {df['ES_TARJETA_PRESENTE'].sum():,}")
-print(f"  ES_TOKENIZADA    : {df['ES_TOKENIZADA'].sum():,}")
-print(f"  ES_INTERNACIONAL : {df['ES_INTERNACIONAL'].sum():,}")
+print(f"  ES_INTERNACIONAL   : {df['ES_INTERNACIONAL'].sum():,}")
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
@@ -310,6 +306,10 @@ if col_fec_rec and col_fec_rec in df.columns and df[col_fec_rec].notna().any():
     df["MES_RECLAMO"]           = df[col_fec_rec].dt.month
     df["MES_ANIO_RECLAMO"]      = df[col_fec_rec].dt.to_period("M").astype(str)
 
+    # FLAG_SIN_FECHA_RECLAMO: filas donde fecha_reclamo estaba vacía
+    # (~1475 casos) — se mantienen en el dataset, solo se marcan
+    df["FLAG_SIN_FECHA_RECLAMO"] = df[col_fec_rec].isna().astype(int)
+
     # BUCKET_RECLAMO: categoría del tiempo de demora
     def bucket_reclamo(dias):
         if pd.isna(dias):       return "SIN_DATO"
@@ -319,50 +319,43 @@ if col_fec_rec and col_fec_rec in df.columns and df[col_fec_rec].notna().any():
         if dias <= 90:          return "TARDIO"
         return "MUY_TARDIO"
 
-    df["BUCKET_RECLAMO"]     = df["DIAS_HASTA_RECLAMO"].map(bucket_reclamo)
-    df["FLAG_RECLAMO_RAPIDO"]= (df["DIAS_HASTA_RECLAMO"] <= UMBRAL_RECLAMO_RAPIDO_DIAS).astype(int)
-    df["FLAG_RECLAMO_TARDIO"]= (df["DIAS_HASTA_RECLAMO"] >  UMBRAL_RECLAMO_TARDIO_DIAS).astype(int)
+    df["BUCKET_RECLAMO"]      = df["DIAS_HASTA_RECLAMO"].map(bucket_reclamo)
+    df["FLAG_RECLAMO_RAPIDO"] = (df["DIAS_HASTA_RECLAMO"] <= UMBRAL_RECLAMO_RAPIDO_DIAS).astype(int)
+    df["FLAG_RECLAMO_TARDIO"] = (df["DIAS_HASTA_RECLAMO"] >  UMBRAL_RECLAMO_TARDIO_DIAS).astype(int)
 
-    # Distribución resumen
-    bucket_dist = df["BUCKET_RECLAMO"].value_counts()
-    print(f"  DIAS_HASTA_RECLAMO — mediana: {df['DIAS_HASTA_RECLAMO'].median():.0f}d  "
-          f"P90: {df['DIAS_HASTA_RECLAMO'].quantile(0.9):.0f}d  "
-          f"max: {df['DIAS_HASTA_RECLAMO'].max():.0f}d")
+    dias_validos = df["DIAS_HASTA_RECLAMO"].dropna()
+    print(f"  FLAG_SIN_FECHA_RECLAMO  : {df['FLAG_SIN_FECHA_RECLAMO'].sum():,} txn sin fecha de reclamo")
+    print(f"  DIAS_HASTA_RECLAMO — mediana: {dias_validos.median():.0f}d  "
+          f"P90: {dias_validos.quantile(0.9):.0f}d  max: {dias_validos.max():.0f}d")
     print(f"  FLAG_RECLAMO_RAPIDO (≤{UMBRAL_RECLAMO_RAPIDO_DIAS}d): {df['FLAG_RECLAMO_RAPIDO'].sum():,}")
     print(f"  FLAG_RECLAMO_TARDIO (>{UMBRAL_RECLAMO_TARDIO_DIAS}d): {df['FLAG_RECLAMO_TARDIO'].sum():,}  ← candidatos autofraud")
-    print(f"  BUCKET_RECLAMO:\n{bucket_dist.to_string()}")
+    print(f"  BUCKET_RECLAMO:\n{df['BUCKET_RECLAMO'].value_counts().to_string()}")
 else:
     print("  ⚠️  fecha_reclamo no encontrada — variables de reclamo omitidas")
-    for col in ["DIAS_HASTA_RECLAMO", "SEMANAS_HASTA_RECLAMO", "MES_RECLAMO",
-                "MES_ANIO_RECLAMO", "BUCKET_RECLAMO", "FLAG_RECLAMO_RAPIDO", "FLAG_RECLAMO_TARDIO"]:
-        df[col] = np.nan if col in ["DIAS_HASTA_RECLAMO","SEMANAS_HASTA_RECLAMO"] else "SIN_DATO"
+    for col in ["DIAS_HASTA_RECLAMO", "SEMANAS_HASTA_RECLAMO"]:
+        df[col] = np.nan
+    for col in ["MES_RECLAMO", "MES_ANIO_RECLAMO", "BUCKET_RECLAMO"]:
+        df[col] = "SIN_DATO"
+    df["FLAG_SIN_FECHA_RECLAMO"] = 1
+    df["FLAG_RECLAMO_RAPIDO"]    = 0
+    df["FLAG_RECLAMO_TARDIO"]    = 0
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
 #  BLOQUE E — BIN EXTENDIDO (BIN10 / BIN11 / BIN12)
-#  La base Monitor guarda la tarjeta en dos columnas:
-#    tarjeta_col1 = posiciones 1-6 (BIN) + posiciones 13+ (últimos dígitos)
-#    tarjeta_col2 = posiciones 7-12 (6 dígitos del medio)
-#  Concatenando col1[:6] + col2 obtenemos los primeros 12 dígitos del PAN.
+#  Se extrae directamente desde la columna `tarjeta` (PAN desencriptado).
+#  BIN10 = primeros 10 dígitos, BIN11 = 11, BIN12 = 12.
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[E] BIN extendido (BIN10/11/12)...")
 
-col_t1 = C.get("tarjeta_col1", "")
-col_t2 = C.get("tarjeta_col2", "")
+col_tarjeta = C.get("tarjeta", "")
 
-_tiene_tarjeta = (
-    col_t1 and col_t2 and
-    col_t1 in df.columns and col_t2 in df.columns
-)
+if col_tarjeta and col_tarjeta in df.columns:
+    _pan = df[col_tarjeta].astype(str).str.strip().str.replace(" ", "", regex=False)
 
-if _tiene_tarjeta:
-    _bin6  = df[col_t1].astype(str).str.strip().str[:6]
-    _mid6  = df[col_t2].astype(str).str.strip().str[:6].str.zfill(6)
-
-    df["BIN_12_DIGITOS"] = _bin6 + _mid6
-    df["BIN_10"]  = df["BIN_12_DIGITOS"].str[:10]
-    df["BIN_11"]  = df["BIN_12_DIGITOS"].str[:11]
-    df["BIN_12"]  = df["BIN_12_DIGITOS"].str[:12]
+    df["BIN_10"] = _pan.str[:10]
+    df["BIN_11"] = _pan.str[:11]
+    df["BIN_12"] = _pan.str[:12]
 
     # Fecha de vencimiento como texto normalizado (MMYY → "0130")
     col_ven = C.get("fecha_vencimiento", "")
@@ -372,35 +365,28 @@ if _tiene_tarjeta:
         df["VENCIMIENTO_STR"] = "0000"
 
     # BIN12 repetido el mismo día: ≥2 tarjetas distintas con mismo BIN12 ese día
-    # Señal de clonación masiva o generación algorítmica
-    bin12_dia = (
-        df.groupby(["BIN_12", "FECHA_DIA"])[col_t1]
-        .transform("nunique")
-    )
+    bin12_dia = df.groupby(["BIN_12", "FECHA_DIA"])[col_tarjeta].transform("nunique")
     df["N_TARJETAS_MISMO_BIN12_DIA"] = bin12_dia
     df["FLAG_BIN12_REPETIDO_DIA"]    = (bin12_dia >= 2).astype(int)
 
-    bin10_dia = (
-        df.groupby(["BIN_10", "FECHA_DIA"])[col_t1]
-        .transform("nunique")
-    )
+    bin10_dia = df.groupby(["BIN_10", "FECHA_DIA"])[col_tarjeta].transform("nunique")
     df["N_TARJETAS_MISMO_BIN10_DIA"] = bin10_dia
     df["FLAG_BIN10_REPETIDO_DIA"]    = (bin10_dia >= 3).astype(int)
 
     # Vencimiento concentrado en BIN: ≥3 tarjetas del mismo BIN con mismo vencimiento
-    ven_bin = (
-        df.groupby([col_bin, "VENCIMIENTO_STR"])[col_t1]
-        .transform("nunique")
-    ) if col_bin and col_bin in df.columns else pd.Series(0, index=df.index)
+    if col_bin and col_bin in df.columns:
+        ven_bin = df.groupby([col_bin, "VENCIMIENTO_STR"])[col_tarjeta].transform("nunique")
+    else:
+        ven_bin = pd.Series(0, index=df.index)
     df["N_TARJETAS_MISMO_VEN_BIN"] = ven_bin
     df["FLAG_VEN_CONCENTRADA_BIN"] = (ven_bin >= 3).astype(int)
 
     print(f"  FLAG_BIN12_REPETIDO_DIA (≥2 tarjetas): {df['FLAG_BIN12_REPETIDO_DIA'].sum():,} txn")
     print(f"  FLAG_BIN10_REPETIDO_DIA (≥3 tarjetas): {df['FLAG_BIN10_REPETIDO_DIA'].sum():,} txn")
-    print(f"  FLAG_VEN_CONCENTRADA_BIN (≥3 tarjetas misma ven): {df['FLAG_VEN_CONCENTRADA_BIN'].sum():,} txn")
+    print(f"  FLAG_VEN_CONCENTRADA_BIN (≥3 misma ven): {df['FLAG_VEN_CONCENTRADA_BIN'].sum():,} txn")
 else:
-    print("  ⚠️  tarjeta_col1/col2 no encontradas — BIN extendido omitido")
-    for col in ["BIN_12_DIGITOS","BIN_10","BIN_11","BIN_12","VENCIMIENTO_STR",
+    print("  ⚠️  columna 'tarjeta' no encontrada — BIN extendido omitido")
+    for col in ["BIN_10","BIN_11","BIN_12","VENCIMIENTO_STR",
                 "N_TARJETAS_MISMO_BIN12_DIA","FLAG_BIN12_REPETIDO_DIA",
                 "N_TARJETAS_MISMO_BIN10_DIA","FLAG_BIN10_REPETIDO_DIA",
                 "N_TARJETAS_MISMO_VEN_BIN","FLAG_VEN_CONCENTRADA_BIN"]:
@@ -523,13 +509,8 @@ df["RATIO_MONTO_VS_PATRON_CLI"] = (df[col_monto] / df["_mean_cli2"].replace(0, n
 df.drop(columns=["_mean_cli2", "_std_cli2"], inplace=True)
 
 # Saldo disponible
-col_saldo = C.get("saldo", "")
-if col_saldo and col_saldo in df.columns:
-    df["RATIO_MONTO_VS_SALDO"] = (df[col_monto] / df[col_saldo].replace(0, np.nan)).round(4)
-    df["FLAG_SALDO_AGOTADO"]   = (df["RATIO_MONTO_VS_SALDO"] >= 0.9).astype(int)
-else:
-    df["RATIO_MONTO_VS_SALDO"] = np.nan
-    df["FLAG_SALDO_AGOTADO"]   = 0
+df["RATIO_MONTO_VS_SALDO"] = np.nan   # saldo no disponible en esta base
+df["FLAG_SALDO_AGOTADO"]   = 0
 
 print(f"  Clientes con 1 reclamo  : {(df['N_RECLAMOS_CLIENTE']==1).sum():,} txn")
 print(f"  Clientes con >1 reclamo : {df['FLAG_CLIENTE_MULTI_RECLAMO'].sum():,} txn")
