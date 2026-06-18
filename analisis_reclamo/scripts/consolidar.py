@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import (
     COLS, PARQUET_RAW, FOLDER_DATA, SEGMENTO_FOCO,
-    PERIODO_INICIO, PERIODO_FIN, SKIPROWS,
+    PERIODO_INICIO, PERIODO_FIN, SKIPROWS, FECHA_DAYFIRST,
     FILTRO_MARCA,
 )
 
@@ -104,20 +104,29 @@ else:
 
 
 # ─── CONSTRUIR FECHA_HORA ─────────────────────────────────────────────────────
+# fecha_txn : "28/09/2025"          → formato dd/mm/yyyy
+# hora_txn  : "01/01/1900 12:51:45" → llega con fecha ficticia; solo importa HH:MM:SS
 
 col_fec = C.get("fecha_txn", "")
 col_hor = C.get("hora_txn", "")
 col_fh  = C.get("fecha_hora", "FECHA_HORA")
 
 if col_fec in df.columns and col_hor in df.columns:
+    # Extraer solo HH:MM:SS desde "01/01/1900 12:51:45"
+    hora_str = (
+        df[col_hor].astype(str).str.strip()
+        .str.extract(r'(\d{1,2}:\d{2}:\d{2})')[0]
+        .fillna("00:00:00")
+    )
     df[col_fh] = pd.to_datetime(
-        df[col_fec].astype(str).str.strip() + " " + df[col_hor].astype(str).str.strip(),
+        df[col_fec].astype(str).str.strip() + " " + hora_str,
+        dayfirst=FECHA_DAYFIRST,
         errors="coerce"
     )
     nulos_fh = df[col_fh].isna().sum()
     print(f"\n  FECHA_HORA construida — {nulos_fh:,} nulos ({nulos_fh/len(df)*100:.1f}%)")
 elif col_fec in df.columns:
-    df[col_fh] = pd.to_datetime(df[col_fec], errors="coerce")
+    df[col_fh] = pd.to_datetime(df[col_fec], dayfirst=FECHA_DAYFIRST, errors="coerce")
     print(f"\n  FECHA_HORA desde {col_fec} (sin hora exacta)")
 else:
     print(f"\n⚠️  No se pudo construir FECHA_HORA — revisar config.py")

@@ -21,6 +21,7 @@ EXCEL_EDA       = BASE_DIR / "output" / "eda_reclamos_tdmc.xlsx"
 # ─── PARÁMETROS DE ANÁLISIS ──────────────────────────────────────────────────
 SEGMENTO_FOCO   = "TD_MC"      # "TD_MC" | "TD_VISA" | "TC" | "TODOS"
 SKIPROWS        = 0            # 0 = encabezado en fila 1
+FECHA_DAYFIRST  = True         # fechas vienen en formato dd/mm/yyyy
 
 # Período de análisis (formato YYYY-MM-DD)
 PERIODO_INICIO  = "2025-11-25"
@@ -40,67 +41,62 @@ GOOGLE_FIN      = "2026-02-28"
 COLS = {
 
     # ── FECHAS ────────────────────────────────────────────────────────────────
-    "fecha_txn"         : "POS_1_FECHA_TRX",           # fecha de la transacción (AAAAMMDD)
-    "hora_txn"          : "POS_1_HORA_TRX",            # hora de la transacción (HH:MM:SS)
+    "fecha_txn"         : "POS1_ACF-FECHA TRX",        # formato dd/mm/yyyy  ej: 28/09/2025
+    "hora_txn"          : "POS1_ACF-HORA TRX",         # llega como "01/01/1900 12:51:45" — el script extrae solo HH:MM:SS
     "fecha_hora"        : "FECHA_HORA",                 # construida por el script (no viene en la base)
     # mes_anio se deriva de fecha_txn en feature_engineering — no se necesita columna
 
     # ── FECHA DE RECLAMO (exclusivo de esta base) ─────────────────────────────
-    "fecha_reclamo"     : "POS_1_FECHA_RECLAMO",
+    "fecha_reclamo"     : "POS1_ACF-FECHA ALERTA",     # formato dd/mm/yyyy — 1475 celdas vacías
     # IMPORTANTE: 1475 celdas vacías en esta columna — el script las maneja así:
     #   - Filas con fecha_reclamo vacía → DIAS_HASTA_RECLAMO = NaN, BUCKET_RECLAMO = "SIN_DATO"
     #   - Se agrega FLAG_SIN_FECHA_RECLAMO = 1 para identificarlas
     #   - NO se eliminan — siguen en el análisis para MCC, canal, BIN, monto, etc.
 
     # ── MONTOS ────────────────────────────────────────────────────────────────
-    "monto"             : "POS_1_MONTO_MONEDA_LOCAL",  # monto en soles
-    "monto_dolar"       : "POS_1_MONTO_DOLLAR",        # equivalente en dólares
-    "monto_original"    : "POS_1_MONTO_ORIGINAL_TRX",  # monto en moneda original de la txn
+    "monto"             : "POS1_ACF-MONTO EN MONEDA LOCAL",  # monto en soles
+    "monto_dolar"       : "POS1_ACF-MONTO DOLLAR",           # equivalente en dólares
+    "monto_original"    : "POS1_ACF-MONTO ORIGINAL TRX",     # monto en moneda original de la txn
     # moneda_trx eliminado — no disponible en esta base
 
     # ── TARJETA / CLIENTE ─────────────────────────────────────────────────────
-    "tarjeta"           : "POS_1_TARJETA",              # PAN desencriptado — BIN10/11/12 se extraen de aquí
-    "bin"               : "POS_1_BIN",                  # primeros 6 dígitos del PAN
-    "id_cliente"        : "POS_1_ID_CLIENTE",
-    "fecha_vencimiento" : "POS_1_V_TO",                 # vencimiento (formato MMYY, ej: "0130" = ene-2030)
-    "tipo_producto"     : "POS_1_TIPO_PROD_TC",         # TC=Crédito | TD=Débito
-    "marca"             : "POS_1_MARCA_O_FRANQUICIA",   # marca de la tarjeta (Visa/MC)
-    "segmento"          : "POS_1_SEGMENTO_CLIENTE",     # segmento ya viene como texto — no necesita mapeo
-    "organizacion"      : "POS_1_ORGANIZACION",         # SBP / CSF
-    # tarjeta_col1, tarjeta_col2, tarjeta_enc, saldo, num_autorizacion,
-    # num_trx, cod_hash eliminados — no disponibles o no necesarios
+    "tarjeta"           : "POS1_ACF-TARJETA",           # PAN desencriptado — BIN10/11/12 se extraen de aquí
+    "bin"               : "POS1_ACF-BIN",               # primeros 6 dígitos del PAN
+    "id_cliente"        : "POS1_ACF-ID CLIENTE",
+    "fecha_vencimiento" : "POS1_ACF-V/TO",              # vencimiento (formato MMYY, ej: "0130" = ene-2030)
+    "tipo_producto"     : "POS1_ACF-TIPO PROD TC",      # TC=Crédito | TD=Débito
+    "marca"             : "POS1_ACF-MARCA O FRANQUICIA",
+    "segmento"          : "POS1_ACF-SEGMENTO CLIENTE",  # ya viene como texto — sin mapeo de diccionario
+    "organizacion"      : "POS1_ACF-ORGANIZACION",
 
     # ── COMERCIO / CANAL ──────────────────────────────────────────────────────
-    "comercio_nom"      : "POS_1_NOMBRE_COMERCIO",
-    "localidad_com"     : "POS_1_LOCALIDAD_COMERCIO",
-    "mcc"               : "POS_1_MCC",
-    "canal"             : "POS_1_CANAL",
-    "entry_mode"        : "POS_1_ENTRY_MODE",
-    "cod_cio"           : "POS_1_CODIGO_CIO",
-    "cod_trx"           : "POS_1_COD_TRX",
-    "pais"              : "POS_1_PAIS_ORIGEN",
-    # NOTA pais: viene como nombre completo (ej: "PERU", "ESTADOS UNIDOS"),
-    #            NO como código ISO. El script filtra por texto, no por número.
-    "reverso"           : "POS_1_REVERSO",
+    "comercio_nom"      : "POS1_ACF-NOMBRE COMERCIO",
+    "localidad_com"     : "POS1_ACF-LOCALIDAD COMERCIO",
+    "mcc"               : "POS1_ACF-MCC",
+    "canal"             : "POS1_ACF-CANAL",
+    "entry_mode"        : "POS1_ACF-ENTRY MODE",
+    "cod_cio"           : "POS1_ACF-CODIGO CIO",
+    "cod_trx"           : "POS1_ACF-COD TRX",
+    "pais"              : "POS1_ACF-PAIS ORIGEN",
+    # NOTA pais: viene como nombre completo (ej: "PERU", "ESTADOS UNIDOS")
+    "reverso"           : "POS1_ACF-REVERSO",
 
     # ── ADQUIRIENTE ───────────────────────────────────────────────────────────
-    "tipo_adquiriente"  : "POS_1_TIPO_ADQUIRIENTE",
+    "tipo_adquiriente"  : "POS1_ACF-TIPO ADQUIRIENTE",
     # Valores: Niubiz, Izipay, Culqi, Openpay, VendeMas, etc.
-    # Útil para identificar si ciertos adquirientes concentran más reclamos
 
     # ── MICROPAGO ─────────────────────────────────────────────────────────────
-    "tipo_micropago"    : "POS_1_TIPO_MICROPAGO",
+    "tipo_micropago"    : "POS1_ACF-TIPO MICROPAGO",
     # Valores: "MICROPAGO" (monto ≤ 150 soles) | "NO MICROPAGO"
-    # Señal de card testing: muchos MICROPAGO de mismo BIN en el mismo día
 
     # ── SEGURIDAD ─────────────────────────────────────────────────────────────
-    "eci"               : "POS_1_ECI_UCAF",             # 3DS (Visa=5 | MC=2)
-    "cod_red_comercio"  : "POS_1_COD_RED_COMERCIO",     # tipo CVV: S=Estático, D=Dinámico, E/N=Sin CVV
-    "ind_recurrente"    : "POS_1_IND_RECURRENTE_MOTO",  # R=recurrente | M/O/T=MOTO
+    "eci"               : "POS1_ACF-ECI UCAF",          # 3DS (Visa=5 | MC=2)
+    "cod_red_comercio"  : "POS1_ACF-COD RED COMERCIO",  # tipo CVV: S=Estático, D=Dinámico, E/N=Sin CVV
+    "ind_recurrente"    : "POS1_ACF-IND RECURRENTE MOTO", # R=recurrente | M/O/T=MOTO
 
     # ── RESPUESTA ─────────────────────────────────────────────────────────────
-    "cod_respuesta"     : "POS_1_COD_RPTA",
-    "razon_respuesta"   : "POS_1_RAZON_RESPUESTA",
+    "cod_respuesta"     : "POS1_ACF-COD RPTA",
+    "razon_respuesta"   : "POS1_ACF-RAZON RESPUESTA",
     # billetera, indicador, score_riesgo_mon, grupo_horario, q_transaccional
     # eliminados — no disponibles en esta base o toda la data es fraude confirmado
     # grupo_horario se crea en feature_engineering desde hora_txn

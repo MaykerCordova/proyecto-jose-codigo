@@ -31,7 +31,7 @@ sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 from config import (
     COLS, PARQUET_RAW, PARQUET_FEATURES, SEGMENTO_FOCO,
-    PERIODO_INICIO, PERIODO_FIN,
+    PERIODO_INICIO, PERIODO_FIN, FECHA_DAYFIRST,
     MARCAR_PERIODO_GOOGLE, GOOGLE_INICIO, GOOGLE_FIN,
     UMBRAL_RECLAMO_TARDIO_DIAS, UMBRAL_RECLAMO_RAPIDO_DIAS,
     UMBRAL_MICROPAGO_MONTO, PAISES_PERU,
@@ -94,10 +94,17 @@ col_hora_txn = C.get("hora_txn", "")
 col_fec_rec  = C.get("fecha_reclamo", "")
 
 # Construir FECHA_HORA si no existe en el parquet
+# hora_txn llega como "01/01/1900 12:51:45" — extraer solo HH:MM:SS
 if col_fh not in df.columns:
     if col_fec_txn in df.columns and col_hora_txn in df.columns:
+        hora_str = (
+            df[col_hora_txn].astype(str).str.strip()
+            .str.extract(r'(\d{1,2}:\d{2}:\d{2})')[0]
+            .fillna("00:00:00")
+        )
         df[col_fh] = pd.to_datetime(
-            df[col_fec_txn].astype(str).str.strip() + " " + df[col_hora_txn].astype(str).str.strip(),
+            df[col_fec_txn].astype(str).str.strip() + " " + hora_str,
+            dayfirst=FECHA_DAYFIRST,
             errors="coerce"
         )
         print(f"  ✅ {col_fh} construida desde {col_fec_txn} + {col_hora_txn}")
@@ -107,9 +114,9 @@ if col_fh not in df.columns:
 else:
     df[col_fh] = pd.to_datetime(df[col_fh], errors="coerce")
 
-# Parsear fecha_reclamo
+# Parsear fecha_reclamo (también en formato dd/mm/yyyy)
 if col_fec_rec and col_fec_rec in df.columns:
-    df[col_fec_rec] = pd.to_datetime(df[col_fec_rec], errors="coerce")
+    df[col_fec_rec] = pd.to_datetime(df[col_fec_rec], dayfirst=FECHA_DAYFIRST, errors="coerce")
 
 # Ordenar cronológicamente para ventanas deslizantes
 if df[col_fh].notna().any():
