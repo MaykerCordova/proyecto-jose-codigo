@@ -73,6 +73,7 @@ COLS = {
     "comercio_nom"      : "POS1_ACF-NOMBRE COMERCIO",
     "localidad_com"     : "POS1_ACF-LOCALIDAD COMERCIO",
     "mcc"               : "POS1_ACF-MCC",
+    "mcc_descripcion"   : "POS1_ACF-DESCRIP MCC",  # ← reemplaza con el nombre exacto de tu columna
     "canal"             : "POS1_ACF-CANAL",
     "entry_mode"        : "POS1_ACF-ENTRY MODE",
     "cod_cio"           : "POS1_ACF-CODIGO CIO",

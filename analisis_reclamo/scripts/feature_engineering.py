@@ -529,38 +529,20 @@ print(f"  Reclamos en >1 comercio : {df['FLAG_MULTI_COMERCIO_RECLAMO'].sum():,} 
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[I] MCC y tipo de comercio...")
 
-col_mcc = C.get("mcc", "")
-
-# Categorías MCC simplificadas para clustering
-MCC_CATEGORIAS = {
-    # Alimentación
-    "5411": "SUPERMERCADO", "5412": "SUPERMERCADO", "5441": "CONFITERIA",
-    "5812": "RESTAURANTE",  "5813": "BAR",           "5814": "FAST_FOOD",
-    # Transporte
-    "4111": "TRANSPORTE",   "4121": "TAXI",          "4131": "BUS",
-    "4511": "AEROLINEA",    "7011": "HOTEL",
-    # Tecnología / Digital
-    "5045": "ELECTRONICA",  "5734": "SOFTWARE",      "7372": "SOFTWARE",
-    "5816": "JUEGOS_DIGITAL","5818": "DIGITAL_GOODS",
-    "4816": "INTERNET",     "5065": "ELECTRONICA",
-    # Retail
-    "5651": "ROPA",         "5661": "CALZADO",       "5699": "ROPA",
-    "5621": "ROPA_MUJER",   "5611": "ROPA_HOMBRE",
-    "5912": "FARMACIA",     "5999": "RETAIL_OTRO",
-    # Servicios financieros / Cajero
-    "6010": "BANCO_VENTANILLA","6011": "CAJERO_ATM",
-    "6012": "BANCO_SERV",   "6051": "CAMBIO_MONEDA",
-    # Entretenimiento
-    "7832": "CINE",         "7922": "ENTRETENIMIENTO","7993": "JUEGOS",
-    "7941": "DEPORTES",
-    # Salud
-    "5047": "SALUD",        "8011": "DOCTOR",        "8049": "OPTOMETRIA",
-    "8099": "SALUD",
-}
+col_mcc      = C.get("mcc", "")
+col_mcc_desc = C.get("mcc_descripcion", "")
 
 if col_mcc and col_mcc in df.columns:
     mcc_str = df[col_mcc].astype(str).str.strip()
-    df["MCC_CATEGORIA"]  = mcc_str.map(MCC_CATEGORIAS).fillna("OTRO")
+
+    # Usar la descripción real de la base — sin diccionario inventado
+    if col_mcc_desc and col_mcc_desc in df.columns:
+        df["MCC_CATEGORIA"] = (
+            df[col_mcc_desc].astype(str).str.strip()
+            .replace({"nan": "Sin descripción", "": "Sin descripción"})
+        )
+    else:
+        df["MCC_CATEGORIA"] = mcc_str  # fallback: usar el código numérico
 
     # Google / Play Store / YouTube (ataque ene-feb 2026)
     MCC_GOOGLE = {"5816", "5818", "7372", "4816"}
@@ -572,9 +554,9 @@ if col_mcc and col_mcc in df.columns:
     print(f"  Top MCC_CATEGORIA:\n{df['MCC_CATEGORIA'].value_counts().head(8).to_string()}")
     print(f"  ES_COMERCIO_GOOGLE: {df['ES_COMERCIO_GOOGLE'].sum():,} txn")
 else:
-    df["MCC_CATEGORIA"]    = "Sin dato"
+    df["MCC_CATEGORIA"]      = "Sin dato"
     df["ES_COMERCIO_GOOGLE"] = 0
-    df["ES_MCC_ATM"]       = 0
+    df["ES_MCC_ATM"]         = 0
 
 # Nombre del comercio: flag Google por nombre (complemento al MCC)
 _nom_com = df[col_com].astype(str).str.upper()
