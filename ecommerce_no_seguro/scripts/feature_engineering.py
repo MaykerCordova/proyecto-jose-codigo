@@ -331,6 +331,84 @@ print(f"  Ráfagas (≥3 fraudes/día)  : {df['FLAG_RAFAGA_DIA'].sum():,} transa
 
 
 # ═══════════════════════════════════════════════════════════════════════════════
+#  BLOQUE D3 — CVV Dinámico: lapso entre transacciones consecutivas
+#  Permite analizar cuántos fraudes caen dentro de la ventana del CVV dinámico
+#  (original 3 min, nueva ventana 8 min) y con cuántas transacciones por tarjeta.
+#
+#  Variables resultado:
+#    LAPSO_PREV_MIN     — minutos desde la txn anterior de la misma tarjeta (NaN = primera)
+#    LAPSO_GRP_3M       — "Primera TRX" / "0-3 Min" / "más de 3 minutos"
+#    LAPSO_GRP_8M       — "Primera TRX" / "0-8 Min" / "más de 8 minutos"
+#    ORDEN_TRX_TARJETA  — posición (1=primera, 2=segunda, ...) de la txn en la tarjeta
+#    Q_TRX_GRUPO        — total fraudes de la tarjeta agrupado: "1","2","3","4","5+"
+#    MES_ANIO           — "ENE-25", "FEB-25"... para eje columnas en Power BI
+# ═══════════════════════════════════════════════════════════════════════════════
+print("\n[D3] CVV Dinámico — lapso entre transacciones consecutivas...")
+
+# Asegurar orden por tarjeta y tiempo (puede haber cambiado después de D2)
+df = df.sort_values([C["tarjeta"], "DATETIME_TRX"]).reset_index(drop=True)
+
+# Minutos desde la transacción anterior de la misma tarjeta
+df["LAPSO_PREV_MIN"] = (
+    df.groupby(C["tarjeta"])["DATETIME_TRX"]
+    .diff()
+    .dt.total_seconds()
+    .div(60)
+    .round(2)
+)
+
+# Ventana 3 minutos (CVV dinámico original)
+def _lapso_3m(x):
+    if pd.isna(x):   return "Primera TRX"
+    elif x <= 3:     return "0-3 Min"
+    else:            return "más de 3 minutos"
+
+# Ventana 8 minutos (nuevo CVV dinámico)
+def _lapso_8m(x):
+    if pd.isna(x):   return "Primera TRX"
+    elif x <= 8:     return "0-8 Min"
+    else:            return "más de 8 minutos"
+
+df["LAPSO_GRP_3M"] = df["LAPSO_PREV_MIN"].map(_lapso_3m)
+df["LAPSO_GRP_8M"] = df["LAPSO_PREV_MIN"].map(_lapso_8m)
+
+# Posición secuencial de la txn dentro de la tarjeta (1=primera, 2=segunda...)
+df["ORDEN_TRX_TARJETA"] = df.groupby(C["tarjeta"]).cumcount() + 1
+
+# Q_TRX_GRUPO: total fraudes por tarjeta agrupado (usa TOTAL_FRAUDES_TARJETA ya calculado)
+df["Q_TRX_GRUPO"] = df["TOTAL_FRAUDES_TARJETA"].apply(
+    lambda n: str(int(n)) if n <= 4 else "5+"
+)
+
+# MES_ANIO: "ENE-25", "FEB-25"... para eje de columnas en Power BI
+_meses_es = {1:"ENE",2:"FEB",3:"MAR",4:"ABR",5:"MAY",6:"JUN",
+             7:"JUL",8:"AGO",9:"SEP",10:"OCT",11:"NOV",12:"DIC"}
+df["MES_ANIO"] = (
+    df["DATETIME_TRX"].dt.month.map(_meses_es)
+    + "-"
+    + df["DATETIME_TRX"].dt.strftime("%y")
+)
+
+# Diagnóstico
+n_primera   = (df["LAPSO_GRP_3M"] == "Primera TRX").sum()
+n_dentro_3m = (df["LAPSO_GRP_3M"] == "0-3 Min").sum()
+n_fuera_3m  = (df["LAPSO_GRP_3M"] == "más de 3 minutos").sum()
+n_dentro_8m = (df["LAPSO_GRP_8M"] == "0-8 Min").sum()
+n_fuera_8m  = (df["LAPSO_GRP_8M"] == "más de 8 minutos").sum()
+
+print(f"  Primera TRX (sin lapso anterior) : {n_primera:,}")
+print(f"  Ventana 3 min  → dentro  : {n_dentro_3m:,}  |  fuera : {n_fuera_3m:,}")
+print(f"  Ventana 8 min  → dentro  : {n_dentro_8m:,}  |  fuera : {n_fuera_8m:,}")
+print(f"  LAPSO_PREV_MIN promedio (excluyendo primera txn): "
+      f"{df.loc[df['LAPSO_PREV_MIN'].notna(), 'LAPSO_PREV_MIN'].mean():.2f} min")
+print("  CVV Dinámico OK ✅")
+print()
+print("  ──── Power BI: Matriz recomendada ────")
+print("  Filas   : LAPSO_GRP_3M  (o LAPSO_GRP_8M)  +  Q_TRX_GRUPO")
+print("  Columnas: MES_ANIO")
+print("  Valores : Recuento de filas (Count de cualquier columna)")
+
+# ═══════════════════════════════════════════════════════════════════════════════
 #  BLOQUE E — Perfil del COMERCIO y del MCC
 # ═══════════════════════════════════════════════════════════════════════════════
 print("\n[E] Perfil de comercio y MCC...")
@@ -561,6 +639,9 @@ VARS_NUEVAS = [
     "TXN_CARD_2M", "TXN_CARD_5M", "TXN_CARD_10M", "TXN_CARD_1H", "TXN_CARD_24H",
     "AMT_CARD_1H", "AMT_CARD_24H",
     "FLAG_VEL_ALTA_1H", "FLAG_VEL_ALTA_10M", "FLAG_ACUM_ALTO_1H",
+    # D3 — CVV dinámico
+    "LAPSO_PREV_MIN", "LAPSO_GRP_3M", "LAPSO_GRP_8M",
+    "ORDEN_TRX_TARJETA", "Q_TRX_GRUPO", "MES_ANIO",
     # E — comercio / MCC
     "TOTAL_FRAUDES_COMERCIO", "MONTO_TOTAL_FRAUDE_COM", "MONTO_PROM_FRAUDE_COM",
     "TARJETAS_DISTINTAS_COM", "CANALES_DISTINTOS_COM", "DIAS_CON_FRAUDE_COM",
