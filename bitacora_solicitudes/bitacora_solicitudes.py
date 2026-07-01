@@ -1,6 +1,6 @@
 """
 ╔══════════════════════════════════════════════════════════════════╗
-║     BITÁCORA SOLICITUDES DE CLIENTES — V1                        ║
+║     BITÁCORA SOLICITUDES DE CLIENTES — V2                        ║
 ║     Scotiabank Peru — Prevención de Fraude                       ║
 ╠══════════════════════════════════════════════════════════════════╣
 ║  Basado en la arquitectura de Bitácora Analytics V8:             ║
@@ -13,30 +13,38 @@
 ║  • Correos de solicitud y de respuesta se guardan como .msg      ║
 ║    para auditoría (columnas Sustento y Sustento_Respuesta).      ║
 ║                                                                  ║
-║  DIFERENCIAS CLAVE respecto a V8:                                ║
+║  CAMBIOS RESPECTO A V1:                                          ║
 ║                                                                  ║
-║  1. NO hay carpetas dedicadas en Outlook. Todo vive en el        ║
-║     buzón: las solicitudes de los funcionarios llegan a la       ║
-║     BANDEJA DE ENTRADA y las respuestas de los analistas         ║
-║     salen por ELEMENTOS ENVIADOS del mismo buzón.                ║
+║  1. El robot ya NO se limita a Bandeja de Entrada / Elementos    ║
+║     Enviados: recorre TODAS las carpetas del buzón (el equipo    ║
+║     archiva manualmente lo gestionado en carpetas propias).      ║
+║     El emparejamiento solicitud↔respuesta sigue siendo por       ║
+║     ConversationID, sin importar en qué carpeta esté cada        ║
+║     correo.                                                      ║
 ║                                                                  ║
-║  2. El robot reconoce las solicitudes por el ASUNTO:             ║
+║  2. Filtro de "respuesta real": como varias personas escriben    ║
+║     sobre el mismo hilo (ej. la jefa pidiendo prioridad antes    ║
+║     de que el analista conteste), ya no se toma el primer        ║
+║     correo saliente del hilo como respuesta. Se exige que sea    ║
+║     un correo con prefijo de respuesta (RE:/RV:) Y dirigido a    ║
+║     al menos un destinatario fuera del dominio interno           ║
+║     (CONFIG["DOMINIO_INTERNO"]) — es decir, un correo que        ║
+║     realmente salió hacia el cliente/entidad, no un aviso        ║
+║     interno entre compañeros.                                    ║
 ║                                                                  ║
-║      Segmento - Tipo de Solicitud - DNI - Nombre de Cliente      ║
+║  3. Firma del analista: se parsea el cuerpo del correo de        ║
+║     respuesta buscando el cargo ("Analista de Prevención de      ║
+║     Fraude") y se toma el nombre de la línea inmediata           ║
+║     anterior → columna Firma_Detectada.                          ║
 ║                                                                  ║
-║     Tipos reconocidos: Aviso de Compra, Cliente Viajero,         ║
-║     VCAS, Error 59, Error 63, Reporte de cuenta.                 ║
-║     Los correos cuyo asunto no contiene ningún tipo se           ║
-║     ignoran (son correo normal del buzón).                       ║
+║  4. Se guarda el correo (SMTP resuelto) del remitente de la      ║
+║     solicitud y del que responde → Correo_Remitente y            ║
+║     Correo_Respondido_Por.                                       ║
 ║                                                                  ║
-║  3. NO se usa el estado leído/no-leído (en un buzón              ║
-║     compartido lo leen los analistas). El robot revisa los       ║
-║     correos de los últimos DIAS_VENTANA días y el                ║
-║     ConversationID ya registrado en SQLite evita duplicar.       ║
-║     El robot NUNCA marca correos como leídos.                    ║
-║                                                                  ║
-║  4. Se calcula el TIEMPO DE RESPUESTA (cuánto demoró el          ║
-║     analista en responder) cuando se detecta la respuesta.       ║
+║  5. Nueva columna Campos_Faltantes_Cantidad: cuántos de los 4    ║
+║     campos esperados en el asunto (Segmento, Tipo, DNI, Nombre)  ║
+║     no se pudieron extraer, en TODOS los registros (no solo en   ║
+║     Pendientes).                                                 ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
@@ -72,6 +80,10 @@ CONFIG = {
     #   "Prevencion de Fraude" → nombre EXACTO del buzón compartido,
     #   tal como aparece en el panel izquierdo de Outlook.
     "BUZON": "",
+    # ⚠️ AJUSTAR: dominio de correo interno del banco. Se usa para
+    #   distinguir una respuesta real (sale hacia afuera) de un aviso
+    #   interno entre compañeros que comparte el mismo hilo.
+    "DOMINIO_INTERNO": "scotiabank.com.pe",
     # Cuántos días hacia atrás revisa el robot en cada corrida.
     # Si el robot deja de correr más días que esto, subir el número
     # temporalmente para no perder correos.
@@ -102,6 +114,10 @@ TIPOS_SOLICITUD = {
 
 CAMPOS_REQUERIDOS = ["Segmento", "Tipo_Solicitud", "DNI", "Nombre_Cliente"]
 
+# Cargo que aparece en la firma de los analistas al final del correo de
+# respuesta — se usa para ubicar el nombre en la línea inmediata anterior.
+PATRON_CARGO = re.compile(r"(?i)analista\s+de\s+prevenci[oó]n\s+de\s+fraude")
+
 
 def detectar_tipo(texto: str) -> str:
     """Devuelve el tipo canónico si el texto coincide con alguna variante."""
@@ -113,6 +129,84 @@ def detectar_tipo(texto: str) -> str:
         if variante in limpio:
             return canonico
     return ""
+
+
+def detectar_firma(cuerpo: str) -> str:
+    """Busca el cargo del analista en el cuerpo y devuelve el nombre que
+    aparece en la línea inmediatamente anterior (patrón típico de firma:
+    'Daniela Quiroz' seguido de 'Analista de Prevención de Fraude').
+    Devuelve "-" si no encuentra el patrón."""
+    lineas = [l.strip() for l in str(cuerpo or "").splitlines()]
+    for i, linea in enumerate(lineas):
+        if PATRON_CARGO.search(linea):
+            for j in range(i - 1, max(i - 4, -1), -1):
+                candidato = lineas[j].strip()
+                if candidato and not PATRON_CARGO.search(candidato):
+                    return candidato
+    return "-"
+
+
+def resolver_smtp(direccion_obj) -> str:
+    """Intenta resolver una dirección Exchange (EX:/O=...) a un SMTP real."""
+    try:
+        eu = direccion_obj.GetExchangeUser()
+        if eu is not None:
+            return eu.PrimarySmtpAddress or ""
+    except Exception:
+        pass
+    return ""
+
+
+def correo_remitente(mail) -> str:
+    """Dirección SMTP del remitente de un correo (resuelve Exchange si aplica)."""
+    try:
+        smtp = resolver_smtp(mail.Sender)
+        if smtp:
+            return smtp
+    except Exception:
+        pass
+    try:
+        return mail.SenderEmailAddress or "-"
+    except Exception:
+        return "-"
+
+
+def destinatarios_externos(mail, dominio_interno: str) -> list:
+    """Direcciones del campo Para (To) que NO pertenecen al dominio interno."""
+    externos = []
+    try:
+        for r in mail.Recipients:
+            try:
+                if r.Type != 1:  # 1 = olTo (destinatario principal, no CC/BCC)
+                    continue
+            except Exception:
+                pass
+            addr = ""
+            try:
+                addr = resolver_smtp(r.AddressEntry)
+            except Exception:
+                addr = ""
+            if not addr:
+                try:
+                    addr = r.Address or ""
+                except Exception:
+                    addr = ""
+            if addr and dominio_interno.lower() not in addr.lower():
+                externos.append(addr)
+    except Exception:
+        pass
+    return externos
+
+
+def es_respuesta_valida(mail, dominio_interno: str) -> bool:
+    """Filtra avisos internos (ej. la jefa pidiendo prioridad) que comparten
+    el ConversationID pero no son la respuesta real hacia el cliente/entidad.
+    Exige que sea un correo de respuesta (RE:/RV:) dirigido a al menos un
+    destinatario fuera del dominio interno."""
+    asunto = mail.Subject or ""
+    if not re.match(r"(?i)^\s*(RE|RV|FW|FWD)\s*:", asunto):
+        return False
+    return len(destinatarios_externos(mail, dominio_interno)) > 0
 
 
 # ══════════════════════════════════════════════════════════════════
@@ -181,6 +275,17 @@ class ProcesadorAsunto:
 
 class GestorBackupSQL:
 
+    # Migración de bases ya existentes: columnas nuevas de la V2.
+    _COLUMNAS_NUEVAS_SOLICITUDES = {
+        "Correo_Remitente":          "TEXT",
+        "Correo_Respondido_Por":     "TEXT",
+        "Firma_Detectada":           "TEXT",
+        "Campos_Faltantes_Cantidad": "INTEGER",
+    }
+    _COLUMNAS_NUEVAS_PENDIENTES = {
+        "Correo_Remitente": "TEXT",
+    }
+
     def __init__(self, ruta_db: str):
         self.ruta_db = ruta_db
         self._init_tablas()
@@ -190,25 +295,29 @@ class GestorBackupSQL:
         with sqlite3.connect(self.ruta_db) as conn:
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS Solicitudes (
-                    Nro_Correlativo    INTEGER,
-                    Fecha              TEXT,
-                    Hora               TEXT,
-                    Remitente          TEXT,
-                    Asunto             TEXT,
-                    Segmento           TEXT,
-                    Tipo_Solicitud     TEXT,
-                    DNI                TEXT,
-                    Nombre_Cliente     TEXT,
-                    Sustento           TEXT,
-                    Respondido_Por     TEXT,
-                    Fecha_Respuesta    TEXT,
-                    Hora_Respuesta     TEXT,
-                    Tiempo_Respuesta   TEXT,
-                    Sustento_Respuesta TEXT,
-                    Mes                TEXT,
-                    Anio               TEXT,
-                    Estado             TEXT,
-                    ConversationID     TEXT PRIMARY KEY
+                    Nro_Correlativo            INTEGER,
+                    Fecha                      TEXT,
+                    Hora                       TEXT,
+                    Remitente                  TEXT,
+                    Correo_Remitente           TEXT,
+                    Asunto                     TEXT,
+                    Segmento                   TEXT,
+                    Tipo_Solicitud             TEXT,
+                    DNI                        TEXT,
+                    Nombre_Cliente             TEXT,
+                    Campos_Faltantes_Cantidad  INTEGER,
+                    Sustento                   TEXT,
+                    Respondido_Por             TEXT,
+                    Correo_Respondido_Por      TEXT,
+                    Firma_Detectada            TEXT,
+                    Fecha_Respuesta            TEXT,
+                    Hora_Respuesta             TEXT,
+                    Tiempo_Respuesta           TEXT,
+                    Sustento_Respuesta         TEXT,
+                    Mes                        TEXT,
+                    Anio                       TEXT,
+                    Estado                     TEXT,
+                    ConversationID             TEXT PRIMARY KEY
                 )
             """)
             conn.execute("""
@@ -218,10 +327,29 @@ class GestorBackupSQL:
                     ConversationID   TEXT,
                     Asunto           TEXT,
                     Remitente        TEXT,
+                    Correo_Remitente TEXT,
                     Campos_Faltantes TEXT,
                     Procesado        INTEGER DEFAULT 0
                 )
             """)
+            conn.commit()
+
+            # Bases creadas con la V1 no tienen las columnas nuevas: se
+            # agregan si faltan, sin tocar los datos ya guardados.
+            existentes_sol = {
+                row[1] for row in conn.execute("PRAGMA table_info(Solicitudes)")
+            }
+            for col, tipo in self._COLUMNAS_NUEVAS_SOLICITUDES.items():
+                if col not in existentes_sol:
+                    conn.execute(f"ALTER TABLE Solicitudes ADD COLUMN {col} {tipo}")
+
+            existentes_pend = {
+                row[1] for row in conn.execute("PRAGMA table_info(Solicitudes_Pendientes)")
+            }
+            for col, tipo in self._COLUMNAS_NUEVAS_PENDIENTES.items():
+                if col not in existentes_pend:
+                    conn.execute(f"ALTER TABLE Solicitudes_Pendientes ADD COLUMN {col} {tipo}")
+
             conn.commit()
 
     def get_max_correlativo(self) -> int:
@@ -275,11 +403,12 @@ class GestorBackupSQL:
     def insertar_solicitud(self, datos: dict):
         sql = """
             INSERT OR IGNORE INTO Solicitudes VALUES (
-                :Nro_Correlativo, :Fecha, :Hora, :Remitente, :Asunto,
-                :Segmento, :Tipo_Solicitud, :DNI, :Nombre_Cliente,
-                :Sustento, :Respondido_Por, :Fecha_Respuesta,
-                :Hora_Respuesta, :Tiempo_Respuesta, :Sustento_Respuesta,
-                :Mes, :Anio, :Estado, :ConversationID
+                :Nro_Correlativo, :Fecha, :Hora, :Remitente, :Correo_Remitente,
+                :Asunto, :Segmento, :Tipo_Solicitud, :DNI, :Nombre_Cliente,
+                :Campos_Faltantes_Cantidad, :Sustento,
+                :Respondido_Por, :Correo_Respondido_Por, :Firma_Detectada,
+                :Fecha_Respuesta, :Hora_Respuesta, :Tiempo_Respuesta,
+                :Sustento_Respuesta, :Mes, :Anio, :Estado, :ConversationID
             )
         """
         with sqlite3.connect(self.ruta_db) as conn:
@@ -287,40 +416,45 @@ class GestorBackupSQL:
             conn.commit()
         print("  💾 [SQLite] Solicitud insertada.")
 
-    def registrar_pendiente(self, conv_id, asunto, remitente, campos_faltantes):
+    def registrar_pendiente(
+        self, conv_id, asunto, remitente, correo_remitente, campos_faltantes
+    ):
         with sqlite3.connect(self.ruta_db) as conn:
             conn.execute("""
                 INSERT INTO Solicitudes_Pendientes
                     (Fecha_Captura, ConversationID, Asunto,
-                     Remitente, Campos_Faltantes)
-                VALUES (?, ?, ?, ?, ?)
+                     Remitente, Correo_Remitente, Campos_Faltantes)
+                VALUES (?, ?, ?, ?, ?, ?)
             """, (
                 datetime.now().strftime("%d/%m/%Y %H:%M"),
-                conv_id, asunto, remitente,
+                conv_id, asunto, remitente, correo_remitente,
                 ", ".join(campos_faltantes),
             ))
             conn.commit()
         print(f"  ⚠️  [SQLite] Asunto sin formato → Pendientes: {asunto[:50]}")
 
     def registrar_respuesta(
-        self, conv_id: str, respondido_por: str,
-        fecha_resp: str, hora_resp: str,
+        self, conv_id: str, respondido_por: str, correo_respondido_por: str,
+        firma_detectada: str, fecha_resp: str, hora_resp: str,
         tiempo_respuesta: str, ruta_respuesta: str
     ):
         # Solo se registra la PRIMERA respuesta (Estado = 'Pendiente')
         with sqlite3.connect(self.ruta_db) as conn:
             conn.execute("""
                 UPDATE Solicitudes
-                SET Estado             = 'Completado',
-                    Respondido_Por     = ?,
-                    Fecha_Respuesta    = ?,
-                    Hora_Respuesta     = ?,
-                    Tiempo_Respuesta   = ?,
-                    Sustento_Respuesta = ?
+                SET Estado                = 'Completado',
+                    Respondido_Por        = ?,
+                    Correo_Respondido_Por = ?,
+                    Firma_Detectada       = ?,
+                    Fecha_Respuesta       = ?,
+                    Hora_Respuesta        = ?,
+                    Tiempo_Respuesta      = ?,
+                    Sustento_Respuesta    = ?
                 WHERE ConversationID = ?
                   AND Estado = 'Pendiente'
-            """, (respondido_por, fecha_resp, hora_resp,
-                  tiempo_respuesta, ruta_respuesta, conv_id))
+            """, (respondido_por, correo_respondido_por, firma_detectada,
+                  fecha_resp, hora_resp, tiempo_respuesta, ruta_respuesta,
+                  conv_id))
             conn.commit()
         print("  ✅ [SQLite] Respuesta registrada.")
 
@@ -408,9 +542,8 @@ class HerramientasOutlook:
 
     def __init__(self, buzon: str = ""):
         """buzon: nombre del buzón compartido; "" usa la cuenta por defecto."""
-        self.outlook  = None
-        self.inbox    = None   # Bandeja de entrada (solicitudes)
-        self.enviados = None   # Elementos enviados (respuestas de analistas)
+        self.outlook = None
+        self.store    = None   # Raíz del buzón — se recorre completo
         try:
             self.outlook = (
                 win32com.client
@@ -418,43 +551,43 @@ class HerramientasOutlook:
                 .GetNamespace("MAPI")
             )
             if buzon:
-                store         = self.outlook.Folders[buzon]
-                self.inbox    = self._subcarpeta(
-                    store, "Bandeja de entrada", "Inbox")
-                self.enviados = self._subcarpeta(
-                    store, "Elementos enviados", "Sent Items")
-                if self.inbox is None:
-                    print(f"  ▲ No se encontró la Bandeja de entrada "
-                          f"del buzón '{buzon}'.")
-                if self.enviados is None:
-                    print(f"  ▲ No se encontró Elementos enviados "
-                          f"del buzón '{buzon}'.")
+                self.store = self.outlook.Folders[buzon]
             else:
-                self.inbox    = self.outlook.GetDefaultFolder(6)
-                self.enviados = self.outlook.GetDefaultFolder(5)
+                # Padre de la Bandeja de Entrada por defecto = raíz del buzón
+                self.store = self.outlook.GetDefaultFolder(6).Parent
         except Exception as e:
             print(f"  ▲ Error conectando a Outlook: {e}")
 
-    @staticmethod
-    def _subcarpeta(store, *nombres):
-        """La carpeta puede llamarse distinto según el idioma de Outlook."""
-        for nombre in nombres:
-            try:
-                return store.Folders[nombre]
-            except Exception:
-                continue
-        return None
-
     @property
     def conectado(self) -> bool:
-        return self.outlook is not None and self.inbox is not None
+        return self.outlook is not None and self.store is not None
+
+    def todas_las_carpetas(self) -> list:
+        """Recorre recursivamente todo el buzón y devuelve las carpetas
+        de correo (Inbox, Enviados y cualquier subcarpeta donde el equipo
+        haya archivado manualmente los correos gestionados)."""
+        acumulado = []
+        self._recorrer(self.store, acumulado)
+        return acumulado
+
+    @staticmethod
+    def _recorrer(folder, acumulado):
+        try:
+            if folder.DefaultItemType == 0:  # 0 = olMailItem
+                acumulado.append(folder)
+        except Exception:
+            pass
+        try:
+            for sub in folder.Folders:
+                HerramientasOutlook._recorrer(sub, acumulado)
+        except Exception:
+            pass
 
     @staticmethod
     def correos_desde(carpeta, fecha: datetime) -> list:
-        """Correos de la carpeta recibidos/enviados desde `fecha`,
-        ordenados del más antiguo al más reciente. NO altera nada."""
+        """Correos de la carpeta recibidos/enviados desde `fecha`.
+        NO altera nada (no marca leído, no mueve nada)."""
         items = carpeta.Items
-        items.Sort("[ReceivedTime]")
         # El filtro Restrict usa formato de fecha US: MM/DD/YYYY
         filtro = f"[ReceivedTime] >= '{fecha.strftime('%m/%d/%Y')} 00:00'"
         try:
@@ -470,6 +603,25 @@ class HerramientasOutlook:
                 except Exception:
                     continue
             return out
+
+    def correos_desde_buzon(self, fecha: datetime) -> list:
+        """Todos los correos de TODO el buzón (todas las carpetas) desde
+        `fecha`, ordenados del más antiguo al más reciente."""
+        todos = []
+        for carpeta in self.todas_las_carpetas():
+            try:
+                todos.extend(self.correos_desde(carpeta, fecha))
+            except Exception:
+                continue
+
+        def _orden(m):
+            try:
+                return m.ReceivedTime
+            except Exception:
+                return fecha
+
+        todos.sort(key=_orden)
+        return todos
 
     def guardar_msg(self, mail, nombre: str) -> str:
         os.makedirs(CONFIG["RUTA_BACKUP_MSG"], exist_ok=True)
@@ -511,7 +663,8 @@ def procesar_solicitudes(
     outlook: HerramientasOutlook, sql: GestorBackupSQL,
     desde: datetime, tolerante: bool = False
 ) -> tuple:
-    """Escanea la Bandeja de entrada y registra las solicitudes.
+    """Escanea TODO el buzón y registra las solicitudes cuyo asunto
+    coincide con la estructura esperada.
 
     tolerante=True (bootstrap): registra aunque falten campos.
     tolerante=False (diario): los incompletos van a Pendientes.
@@ -520,8 +673,8 @@ def procesar_solicitudes(
     registrados = 0
     pendientes  = 0
 
-    msgs = outlook.correos_desde(outlook.inbox, desde)
-    print(f"  Correos en bandeja desde {desde.strftime('%d/%m/%Y')}: {len(msgs)}\n")
+    msgs = outlook.correos_desde_buzon(desde)
+    print(f"  Correos en el buzón desde {desde.strftime('%d/%m/%Y')}: {len(msgs)}\n")
 
     for m in msgs:
         try:
@@ -531,8 +684,8 @@ def procesar_solicitudes(
             if not ProcesadorAsunto.es_solicitud(asunto):
                 continue
 
-            # Las respuestas/reenvíos del mismo hilo también llegan a la
-            # bandeja; la solicitud original es la que NO tiene prefijo RE:/RV:
+            # Las respuestas/reenvíos del mismo hilo también aparecen en el
+            # buzón; la solicitud original es la que NO tiene prefijo RE:/RV:
             es_reply = bool(re.match(r"(?i)^\s*(RE|RV|FW|FWD)\s*:", asunto))
 
             conv_id = m.ConversationID
@@ -549,12 +702,14 @@ def procesar_solicitudes(
 
             d                = ProcesadorAsunto.parsear(asunto)
             campos_faltantes = ProcesadorAsunto.validar(d)
+            correo_remit     = correo_remitente(m)
 
             if campos_faltantes and not tolerante:
                 sql.registrar_pendiente(
                     conv_id          = conv_id,
                     asunto           = asunto,
                     remitente        = m.SenderName,
+                    correo_remitente = correo_remit,
                     campos_faltantes = campos_faltantes,
                 )
                 outlook.guardar_msg(m, f"PENDIENTE_{asunto[:40]}")
@@ -567,25 +722,29 @@ def procesar_solicitudes(
             )
 
             fila = {
-                "Nro_Correlativo":    correlativo,
-                "Fecha":              m.ReceivedTime.strftime("%d/%m/%Y"),
-                "Hora":               m.ReceivedTime.strftime("%H:%M"),
-                "Remitente":          m.SenderName,
-                "Asunto":             asunto,
-                "Segmento":           d["Segmento"],
-                "Tipo_Solicitud":     d["Tipo_Solicitud"],
-                "DNI":                d["DNI"],
-                "Nombre_Cliente":     d["Nombre_Cliente"],
-                "Sustento":           ruta_msg,
-                "Respondido_Por":     "-",
-                "Fecha_Respuesta":    "-",
-                "Hora_Respuesta":     "-",
-                "Tiempo_Respuesta":   "-",
-                "Sustento_Respuesta": "-",
-                "Mes":                m.ReceivedTime.strftime("%m"),
-                "Anio":               m.ReceivedTime.strftime("%Y"),
-                "Estado":             "Pendiente",
-                "ConversationID":     conv_id,
+                "Nro_Correlativo":            correlativo,
+                "Fecha":                      m.ReceivedTime.strftime("%d/%m/%Y"),
+                "Hora":                       m.ReceivedTime.strftime("%H:%M"),
+                "Remitente":                  m.SenderName,
+                "Correo_Remitente":           correo_remit,
+                "Asunto":                     asunto,
+                "Segmento":                   d["Segmento"],
+                "Tipo_Solicitud":             d["Tipo_Solicitud"],
+                "DNI":                        d["DNI"],
+                "Nombre_Cliente":             d["Nombre_Cliente"],
+                "Campos_Faltantes_Cantidad":  len(campos_faltantes),
+                "Sustento":                   ruta_msg,
+                "Respondido_Por":             "-",
+                "Correo_Respondido_Por":      "-",
+                "Firma_Detectada":            "-",
+                "Fecha_Respuesta":            "-",
+                "Hora_Respuesta":             "-",
+                "Tiempo_Respuesta":           "-",
+                "Sustento_Respuesta":         "-",
+                "Mes":                        m.ReceivedTime.strftime("%m"),
+                "Anio":                       m.ReceivedTime.strftime("%Y"),
+                "Estado":                     "Pendiente",
+                "ConversationID":             conv_id,
             }
 
             sql.insertar_solicitud(fila)
@@ -602,17 +761,15 @@ def procesar_solicitudes(
 def procesar_respuestas(
     outlook: HerramientasOutlook, sql: GestorBackupSQL, desde: datetime
 ) -> int:
-    """Escanea Elementos enviados del buzón: si un correo enviado
-    pertenece a un hilo registrado y aún Pendiente, es la respuesta
-    del analista. Devuelve cuántas respuestas se registraron."""
+    """Escanea TODO el buzón: si un correo pertenece a un hilo registrado
+    y aún Pendiente, y además cumple con `es_respuesta_valida` (correo de
+    respuesta dirigido a un destinatario externo — no un aviso interno),
+    se toma como la respuesta del analista. Devuelve cuántas respuestas
+    se registraron."""
     respuestas = 0
 
-    if outlook.enviados is None:
-        print("  ▲ Sin acceso a Elementos enviados — fase omitida.")
-        return 0
-
-    msgs = outlook.correos_desde(outlook.enviados, desde)
-    print(f"  Enviados desde {desde.strftime('%d/%m/%Y')}: {len(msgs)}\n")
+    msgs = outlook.correos_desde_buzon(desde)
+    print(f"  Correos revisados desde {desde.strftime('%d/%m/%Y')}: {len(msgs)}\n")
 
     for m in msgs:
         try:
@@ -622,23 +779,32 @@ def procesar_respuestas(
             if sql.get_estado(conv_id) != "Pendiente":
                 continue
 
+            if not es_respuesta_valida(m, CONFIG["DOMINIO_INTERNO"]):
+                # Puede ser un aviso interno (ej. la jefa pidiendo prioridad)
+                # que comparte el hilo pero no es la respuesta real.
+                continue
+
             print(f"  [✓] Respuesta detectada: {(m.Subject or '')[:60]}")
 
-            ruta_resp  = outlook.guardar_msg(m, f"RESP_{conv_id[:20]}")
-            fecha_resp = m.SentOn
-            inicio     = sql.get_fecha_solicitud(conv_id)
-            demora     = (
+            ruta_resp        = outlook.guardar_msg(m, f"RESP_{conv_id[:20]}")
+            fecha_resp       = m.SentOn
+            inicio           = sql.get_fecha_solicitud(conv_id)
+            demora           = (
                 formatear_demora(inicio, a_naive(fecha_resp))
                 if inicio else "-"
             )
+            firma            = detectar_firma(m.Body)
+            correo_resp      = correo_remitente(m)
 
             sql.registrar_respuesta(
-                conv_id          = conv_id,
-                respondido_por   = m.SenderName,
-                fecha_resp       = fecha_resp.strftime("%d/%m/%Y"),
-                hora_resp        = fecha_resp.strftime("%H:%M"),
-                tiempo_respuesta = demora,
-                ruta_respuesta   = ruta_resp,
+                conv_id               = conv_id,
+                respondido_por        = m.SenderName,
+                correo_respondido_por = correo_resp,
+                firma_detectada       = firma,
+                fecha_resp            = fecha_resp.strftime("%d/%m/%Y"),
+                hora_resp             = fecha_resp.strftime("%H:%M"),
+                tiempo_respuesta      = demora,
+                ruta_respuesta        = ruta_resp,
             )
             respuestas += 1
 
@@ -655,7 +821,7 @@ def procesar_respuestas(
 def main():
     sep = "═" * 65
     print(f"\n{sep}")
-    print("  🤖  ROBOT BITÁCORA Solicitudes de Clientes — V1")
+    print("  🤖  ROBOT BITÁCORA Solicitudes de Clientes — V2")
     print(f"  🕐  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  👤  Usuario: {os.getenv('USERNAME', 'desconocido')}")
     print(f"  📂  Base: {_BASE}")
@@ -672,18 +838,18 @@ def main():
     desde = datetime.now() - timedelta(days=CONFIG["DIAS_VENTANA"])
     desde = datetime(desde.year, desde.month, desde.day)
 
-    # ── FASE 1: SOLICITUDES (Bandeja de entrada) ──────────────────
+    # ── FASE 1: SOLICITUDES (todo el buzón) ────────────────────────
     print(f"{'─'*40}")
-    print("  FASE 1 — Solicitudes (Bandeja de entrada)")
+    print("  FASE 1 — Solicitudes (todo el buzón)")
     print(f"{'─'*40}\n")
 
     registrados, pendientes = procesar_solicitudes(
         outlook, sql, desde, tolerante=False
     )
 
-    # ── FASE 2: RESPUESTAS (Elementos enviados) ───────────────────
+    # ── FASE 2: RESPUESTAS (todo el buzón) ─────────────────────────
     print(f"\n{'─'*40}")
-    print("  FASE 2 — Respuestas (Elementos enviados)")
+    print("  FASE 2 — Respuestas (todo el buzón)")
     print(f"{'─'*40}\n")
 
     respuestas = procesar_respuestas(outlook, sql, desde)
