@@ -663,7 +663,8 @@ class HerramientasOutlook:
 
         def _orden(m):
             try:
-                return m.ReceivedTime
+                rt = m.ReceivedTime
+                return rt.replace(tzinfo=None) if rt.tzinfo else rt
             except Exception:
                 return fecha
 
