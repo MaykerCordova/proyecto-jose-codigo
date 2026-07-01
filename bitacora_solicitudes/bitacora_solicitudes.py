@@ -84,6 +84,11 @@ CONFIG = {
     #   distinguir una respuesta real (sale hacia afuera) de un aviso
     #   interno entre compañeros que comparte el mismo hilo.
     "DOMINIO_INTERNO": "scotiabank.com.pe",
+    # ⚠️ AJUSTAR: nombres EXACTOS (nivel superior del buzón) de las
+    #   carpetas a recorrer (con todas sus subcarpetas). Deja la lista
+    #   vacía [] para recorrer TODO el buzón (más lento: incluye
+    #   Elementos Enviados/Eliminados, Historial de Conversaciones, etc).
+    "CARPETAS_RAIZ": ["Bandeja de entrada", "BANCA PRIVADA"],
     # Cuántos días hacia atrás revisa el robot en cada corrida.
     # Si el robot deja de correr más días que esto, subir el número
     # temporalmente para no perder correos.
@@ -540,6 +545,17 @@ def exportar_excel_pendientes(sql: GestorBackupSQL, ruta: str):
 
 class HerramientasOutlook:
 
+    # Carpetas de sistema que nunca aportan solicitudes/respuestas reales;
+    # se saltan aunque queden dentro de una carpeta raíz incluida.
+    _CARPETAS_EXCLUIR = {
+        "elementos eliminados", "deleted items",
+        "borradores", "drafts",
+        "bandeja de salida", "outbox",
+        "historial de conversaciones", "conversation history",
+        "correo no deseado", "junk email",
+        "rss feeds", "fuentes rss",
+    }
+
     def __init__(self, buzon: str = ""):
         """buzon: nombre del buzón compartido; "" usa la cuenta por defecto."""
         self.outlook = None
@@ -562,16 +578,47 @@ class HerramientasOutlook:
     def conectado(self) -> bool:
         return self.outlook is not None and self.store is not None
 
+    def _carpeta_raiz_por_nombre(self, nombre: str):
+        """Busca una carpeta de primer nivel del buzón por nombre exacto
+        (sin distinguir mayúsculas)."""
+        try:
+            for f in self.store.Folders:
+                if f.Name.strip().lower() == nombre.strip().lower():
+                    return f
+        except Exception:
+            pass
+        return None
+
     def todas_las_carpetas(self) -> list:
-        """Recorre recursivamente todo el buzón y devuelve las carpetas
-        de correo (Inbox, Enviados y cualquier subcarpeta donde el equipo
-        haya archivado manualmente los correos gestionados)."""
+        """Devuelve las carpetas de correo a escanear.
+
+        Si CONFIG["CARPETAS_RAIZ"] tiene nombres, solo recorre esas
+        carpetas de primer nivel (y sus subcarpetas) — así se evita
+        perder tiempo en Elementos Enviados/Eliminados, Historial de
+        Conversaciones, etc. Si la lista está vacía, recorre TODO
+        el buzón."""
         acumulado = []
-        self._recorrer(self.store, acumulado)
+        raices = CONFIG.get("CARPETAS_RAIZ") or []
+
+        if raices:
+            for nombre in raices:
+                carpeta = self._carpeta_raiz_por_nombre(nombre)
+                if carpeta is None:
+                    print(f"  ▲ No se encontró la carpeta raíz '{nombre}' en el buzón.")
+                    continue
+                self._recorrer(carpeta, acumulado)
+        else:
+            self._recorrer(self.store, acumulado)
+
         return acumulado
 
-    @staticmethod
-    def _recorrer(folder, acumulado):
+    @classmethod
+    def _recorrer(cls, folder, acumulado):
+        try:
+            if folder.Name.strip().lower() in cls._CARPETAS_EXCLUIR:
+                return
+        except Exception:
+            pass
         try:
             if folder.DefaultItemType == 0:  # 0 = olMailItem
                 acumulado.append(folder)
@@ -579,7 +626,7 @@ class HerramientasOutlook:
             pass
         try:
             for sub in folder.Folders:
-                HerramientasOutlook._recorrer(sub, acumulado)
+                cls._recorrer(sub, acumulado)
         except Exception:
             pass
 
