@@ -88,7 +88,7 @@ CONFIG = {
     #   carpetas a recorrer (con todas sus subcarpetas). Deja la lista
     #   vacía [] para recorrer TODO el buzón (más lento: incluye
     #   Elementos Enviados/Eliminados, Historial de Conversaciones, etc).
-    "CARPETAS_RAIZ": ["Bandeja de entrada", "BANCA PRIVADA"],
+    "CARPETAS_RAIZ": ["Bandeja de entrada", "BANCA PRIVADA", "Elementos enviados"],
     # Cuántos días hacia atrás revisa el robot en cada corrida.
     # Si el robot deja de correr más días que esto, subir el número
     # temporalmente para no perder correos.
