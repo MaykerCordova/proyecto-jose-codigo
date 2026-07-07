@@ -702,6 +702,17 @@ def a_naive(fecha_com) -> datetime:
                     fecha_com.hour, fecha_com.minute)
 
 
+def asunto_seguro(m) -> str:
+    """Lee el Subject para loguear un error sin arriesgarse a otra
+    excepción: Outlook a veces falla con pywintypes.com_error al leer
+    propiedades de ítems problemáticos, y getattr(..., default) NO
+    atrapa ese tipo de error (solo AttributeError)."""
+    try:
+        return m.Subject or "?"
+    except Exception:
+        return "?"
+
+
 # ══════════════════════════════════════════════════════════════════
 # 8. FASES DE PROCESAMIENTO
 #    (compartidas entre el robot diario y el bootstrap histórico)
@@ -801,7 +812,7 @@ def procesar_solicitudes(
                   f"[{d['Tipo_Solicitud']}]\n")
 
         except Exception as e:
-            print(f"  ▲ Error solicitud [{getattr(m, 'Subject', '?')[:60]}]: {e}")
+            print(f"  ▲ Error solicitud [{asunto_seguro(m)[:60]}]: {e}")
 
     return registrados, pendientes
 
@@ -857,7 +868,7 @@ def procesar_respuestas(
             respuestas += 1
 
         except Exception as e:
-            print(f"  ▲ Error respuesta [{getattr(m, 'Subject', '?')[:60]}]: {e}")
+            print(f"  ▲ Error respuesta [{asunto_seguro(m)[:60]}]: {e}")
 
     return respuestas
 
