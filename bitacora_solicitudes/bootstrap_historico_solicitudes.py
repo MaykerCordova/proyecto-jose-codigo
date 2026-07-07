@@ -18,9 +18,15 @@
 ║    los campos faltantes (no se descarta nada del histórico).     ║
 ║  • Después de correr esto, el robot diario                       ║
 ║    (bitacora_solicitudes.py) toma el control de los nuevos.      ║
+║                                                                  ║
+║  Por defecto arranca desde FECHA_INICIO (abajo). Para pruebas    ║
+║  rápidas (ej. últimos 2 días) sin editar el código, se puede     ║
+║  pasar la fecha por parámetro:                                   ║
+║      python bootstrap_historico_solicitudes.py --desde 2026-07-05║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
+import argparse
 from datetime import datetime
 
 from bitacora_solicitudes import (
@@ -30,18 +36,37 @@ from bitacora_solicitudes import (
     exportar_excel_desde_sqlite,
 )
 
-# Solo se procesan correos recibidos/enviados desde esta fecha
+# Fecha por defecto si no se pasa --desde: se procesan correos desde aquí.
 FECHA_INICIO = datetime(2026, 1, 1)
 
 
+def _parsear_argumentos():
+    parser = argparse.ArgumentParser(
+        description="Bootstrap histórico — Bitácora Solicitudes de Clientes"
+    )
+    parser.add_argument(
+        "--desde",
+        type=str,
+        default=None,
+        help="Fecha desde la cual procesar correos, formato YYYY-MM-DD "
+             "(ej. 2026-07-05). Si no se indica, usa FECHA_INICIO del código.",
+    )
+    return parser.parse_args()
+
+
 def main():
+    args = _parsear_argumentos()
+    fecha_inicio = (
+        datetime.strptime(args.desde, "%Y-%m-%d") if args.desde else FECHA_INICIO
+    )
+
     sep = "═" * 65
     print(f"\n{sep}")
     print("  🏗️   BOOTSTRAP HISTÓRICO — Solicitudes de Clientes")
     print(f"  🕐  {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
     print(f"  📂  Base: {_BASE}")
     print(f"  📬  Buzón: {CONFIG['BUZON'] or '(cuenta por defecto)'}")
-    print(f"  📅  Desde: {FECHA_INICIO.strftime('%d/%m/%Y')}")
+    print(f"  📅  Desde: {fecha_inicio.strftime('%d/%m/%Y')}")
     print(f"{sep}\n")
 
     outlook = HerramientasOutlook(CONFIG["BUZON"])
@@ -57,7 +82,7 @@ def main():
     print(f"{'─'*40}\n")
 
     registrados, _ = procesar_solicitudes(
-        outlook, sql, FECHA_INICIO, tolerante=True
+        outlook, sql, fecha_inicio, tolerante=True
     )
 
     # ── FASE 2: RESPUESTAS HISTÓRICAS ─────────────────────────────
@@ -65,7 +90,7 @@ def main():
     print("  FASE 2 — Respuestas históricas")
     print(f"{'─'*40}\n")
 
-    respuestas = procesar_respuestas(outlook, sql, FECHA_INICIO)
+    respuestas = procesar_respuestas(outlook, sql, fecha_inicio)
 
     # ── EXPORTACIÓN ────────────────────────────────────────────────
     print(f"\n{'─'*40}")
