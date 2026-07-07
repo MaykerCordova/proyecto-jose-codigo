@@ -54,11 +54,23 @@ def _parsear_argumentos():
     return parser.parse_args()
 
 
+def _parsear_fecha(texto: str) -> datetime:
+    """Acepta 2026-07-05, 2026_07_05, 2026/07/05 o 05-07-2026."""
+    normalizado = texto.strip().replace("_", "-").replace("/", "-")
+    for formato in ("%Y-%m-%d", "%d-%m-%Y"):
+        try:
+            return datetime.strptime(normalizado, formato)
+        except ValueError:
+            continue
+    raise ValueError(
+        f"No se pudo interpretar la fecha '{texto}'. Usa el formato AAAA-MM-DD "
+        f"(ej. 2026-07-05)."
+    )
+
+
 def main():
     args = _parsear_argumentos()
-    fecha_inicio = (
-        datetime.strptime(args.desde, "%Y-%m-%d") if args.desde else FECHA_INICIO
-    )
+    fecha_inicio = _parsear_fecha(args.desde) if args.desde else FECHA_INICIO
 
     sep = "═" * 65
     print(f"\n{sep}")
@@ -76,13 +88,16 @@ def main():
         print("❌ No se pudo conectar a Outlook. Abortando.")
         return
 
+    # El buzón se recorre UNA sola vez; ambas fases comparten el índice.
+    indice = outlook.indexar_correos(fecha_inicio)
+
     # ── FASE 1: SOLICITUDES HISTÓRICAS (modo tolerante) ───────────
     print(f"{'─'*40}")
     print("  FASE 1 — Solicitudes históricas")
     print(f"{'─'*40}\n")
 
     registrados, _ = procesar_solicitudes(
-        outlook, sql, fecha_inicio, tolerante=True
+        outlook, sql, fecha_inicio, tolerante=True, indice=indice
     )
 
     # ── FASE 2: RESPUESTAS HISTÓRICAS ─────────────────────────────
@@ -90,7 +105,7 @@ def main():
     print("  FASE 2 — Respuestas históricas")
     print(f"{'─'*40}\n")
 
-    respuestas = procesar_respuestas(outlook, sql, fecha_inicio)
+    respuestas = procesar_respuestas(outlook, sql, fecha_inicio, indice=indice)
 
     # ── EXPORTACIÓN ────────────────────────────────────────────────
     print(f"\n{'─'*40}")
@@ -108,4 +123,7 @@ def main():
 
 
 if __name__ == "__main__":
-    main()
+    try:
+        main()
+    except ValueError as e:
+        print(f"\n❌ {e}\n")
