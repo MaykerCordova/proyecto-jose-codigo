@@ -13,6 +13,9 @@ PROCESO 2 — JOY: Excel FINJOY vs Monitor JOY
   - Maneja códigos compuestos (WJ33+WJ35+JN05 → suma en Excel)
   - Bitácora Excel con hojas DIARIO y POR_CONDICION
   - Recuperación automática de fechas pendientes (fin de semana, ausencias)
+  - Umbral 0.1%, solo alerta cuando JOY (Excel) > Monitor
+  - Respeta filas ingresadas a mano en la bitácora (no reprocesa esas fechas;
+    basta llenar FECHA, TOTAL_JOY y TOTAL_MONITOR — el resto se recalcula)
 """
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -74,7 +77,7 @@ TO_JOY   = (
 
 # ── Parámetros ────────────────────────────────────────────────────────────────
 UMBRAL          = 0.005          # 0.5% umbral de alerta fija (Proceso 1)
-UMBRAL_JOY      = 0.005          # 0.5% umbral de alerta fija (Proceso 2)
+UMBRAL_JOY      = 0.001          # 0.1% umbral de alerta fija (Proceso 2, solo si JOY Excel > Monitor)
 MES_INICIO      = "2025-11"      # Mes de inicio para gráfico mensual
 
 # ── Paleta corporativa (compartida) ───────────────────────────────────────────
@@ -653,9 +656,30 @@ def _ultima_fecha_joy() -> date:
         df = pd.read_excel(RUTA_EXCEL_JOY, sheet_name="DIARIO")
         if df.empty or "FECHA" not in df.columns:
             return date(2026, 1, 1)
-        return pd.to_datetime(df["FECHA"]).max().date()
+        fechas = pd.to_datetime(df["FECHA"], errors="coerce").dropna()
+        if fechas.empty:
+            return date(2026, 1, 1)
+        return fechas.max().date()
     except Exception:
         return date(2026, 1, 1)
+
+
+def _fechas_registradas_joy() -> set:
+    """
+    Fechas ya presentes en la hoja DIARIO (incluye ingresos manuales).
+    El script NO reprocesa estas fechas: si una fila fue ingresada o
+    corregida a mano en la bitácora, se respeta tal cual.
+    """
+    if not os.path.exists(RUTA_EXCEL_JOY):
+        return set()
+    try:
+        df = pd.read_excel(RUTA_EXCEL_JOY, sheet_name="DIARIO")
+        if "FECHA" not in df.columns:
+            return set()
+        fechas = pd.to_datetime(df["FECHA"], errors="coerce").dropna()
+        return set(fechas.dt.date)
+    except Exception:
+        return set()
 
 
 def _guardar_bitacora_joy(df_nuevo: pd.DataFrame, hoja: str):
@@ -772,10 +796,12 @@ def _bloque_html_joy(fila: pd.Series) -> str:
     mon  = int(fila["TOTAL_MONITOR"])
     diff = int(fila["DIFERENCIA"])
     pct  = float(fila["PCT_DIFERENCIA"])
+    # Alerta solo cuando JOY (Excel) > Monitor y la diferencia supera el umbral
+    es_alerta = (joy > mon) and (abs(pct) > UMBRAL_JOY * 100)
     umbral_msg = (
         f'<span style="color:{COLOR_ALERTA};font-weight:bold;">'
         f'⚠ Superando el umbral del {UMBRAL_JOY*100:.1f}%.</span>'
-        if pct > UMBRAL_JOY * 100 else
+        if es_alerta else
         f'<span style="color:{COLOR_OK};">✔ No se superó el umbral del {UMBRAL_JOY*100:.1f}%.</span>'
     )
     return f"""
@@ -801,7 +827,10 @@ def _tabla_condicion_html(df: pd.DataFrame) -> str:
         for c in df_top.columns)
     filas_html = ""
     for _, row in df_top.iterrows():
-        bg = "#FEE2E2" if row["PCT_DIFERENCIA"] > UMBRAL_JOY * 100 else "#FFFFFF"
+        # Fila en rojo solo cuando JOY (Excel) > Monitor y supera el umbral
+        es_alerta = (row["TOTAL_JOY"] > row["TOTAL_MONITOR"]
+                     and abs(row["PCT_DIFERENCIA"]) > UMBRAL_JOY * 100)
+        bg = "#FEE2E2" if es_alerta else "#FFFFFF"
         celdas = ""
         for val in row:
             if isinstance(val, float):
@@ -850,8 +879,9 @@ def run_proceso_joy() -> bool:
         print(f"  [ERROR] {e}")
         return False
 
-    ultima_fecha = _ultima_fecha_joy()
-    fecha_filtro = ultima_fecha + timedelta(days=1)
+    ultima_fecha        = _ultima_fecha_joy()
+    fechas_registradas  = _fechas_registradas_joy()
+    fecha_filtro        = ultima_fecha + timedelta(days=1)
     print(f"  Última fecha bitácora JOY: {ultima_fecha}")
     print(f"  Buscando correos desde   : {fecha_filtro}")
 
@@ -886,6 +916,12 @@ def run_proceso_joy() -> bool:
             continue
 
         fecha_datos = _fecha_de_nombre(nombre) or (rec_date - timedelta(days=1))
+
+        if fecha_datos in fechas_registradas:
+            print(f"  [INFO] {fecha_datos} ya existe en la bitácora "
+                  f"(posible ingreso manual). Se respeta y se omite.")
+            continue
+
         print(f"\n  Procesando {fecha_datos}  (recibido {rec_date})")
         print(f"    Excel JOY (SI): {len(df_excel)} condiciones")
 
@@ -916,7 +952,8 @@ def run_proceso_joy() -> bool:
             "DIFERENCIA":     diff,
             "PCT_DIFERENCIA": pct,
         })
-        marca = "⚠️" if pct > UMBRAL_JOY * 100 else "✅"
+        # Alerta solo cuando JOY (Excel) > Monitor y la diferencia supera el umbral
+        marca = "⚠️" if (total_joy > total_mon and abs(pct) > UMBRAL_JOY * 100) else "✅"
         print(f"    {marca} JOY={total_joy:,} | Monitor={total_mon:,} | "
               f"Δ={diff:,} ({pct:.2f}%)")
 
@@ -931,9 +968,18 @@ def run_proceso_joy() -> bool:
     if not df_condicion.empty:
         _guardar_bitacora_joy(df_condicion, "POR_CONDICION")
 
-    # Histórico completo para gráficos
+    # Histórico completo para gráficos.
+    # Se recalculan DIFERENCIA y PCT_DIFERENCIA desde los totales: una fila
+    # ingresada a mano solo necesita FECHA, TOTAL_JOY y TOTAL_MONITOR.
     df_hist = pd.read_excel(RUTA_EXCEL_JOY, sheet_name="DIARIO")
-    df_hist["FECHA"] = pd.to_datetime(df_hist["FECHA"])
+    df_hist["FECHA"]          = pd.to_datetime(df_hist["FECHA"], errors="coerce")
+    df_hist                   = df_hist.dropna(subset=["FECHA"])
+    df_hist["TOTAL_JOY"]      = pd.to_numeric(df_hist["TOTAL_JOY"],     errors="coerce")
+    df_hist["TOTAL_MONITOR"]  = pd.to_numeric(df_hist["TOTAL_MONITOR"], errors="coerce")
+    df_hist["DIFERENCIA"]     = df_hist["TOTAL_JOY"] - df_hist["TOTAL_MONITOR"]
+    df_hist["PCT_DIFERENCIA"] = np.where(
+        df_hist["TOTAL_MONITOR"] != 0,
+        (df_hist["DIFERENCIA"] / df_hist["TOTAL_MONITOR"] * 100).round(4), 0.0)
     # Renombrar para compatibilidad con funciones de gráfico
     df_hist = df_hist.rename(columns={"FECHA": "Fecha"})
 
