@@ -816,8 +816,17 @@ def _bloque_html_joy(fila: pd.Series) -> str:
 
 
 def _tabla_condicion_html(df: pd.DataFrame) -> str:
-    """Tabla HTML top 20 condiciones por mayor diferencia absoluta."""
-    df_top = (df.assign(ABS=df["DIFERENCIA"].abs())
+    """
+    Tabla HTML top 20 condiciones por mayor diferencia absoluta.
+    Solo muestra el ÚLTIMO día procesado (si la corrida recuperó varios
+    días de backlog, los anteriores quedan en la hoja POR_CONDICION).
+    """
+    fechas    = pd.to_datetime(df["FECHA"])
+    fecha_max = fechas.max()
+    df_dia    = df[fechas == fecha_max].copy()
+    df_dia["FECHA"] = fecha_max.strftime("%d/%m/%Y")
+
+    df_top = (df_dia.assign(ABS=df_dia["DIFERENCIA"].abs())
                .sort_values("ABS", ascending=False)
                .drop(columns=["ABS"])
                .head(20))
@@ -841,7 +850,7 @@ def _tabla_condicion_html(df: pd.DataFrame) -> str:
                 celdas += f"<td style='padding:5px 9px;border:1px solid #ddd;font-size:11px'>{val}</td>"
         filas_html += f"<tr style='background:{bg}'>{celdas}</tr>"
     return f"""
-    <h4>Detalle por condición (top 20 por diferencia absoluta)</h4>
+    <h4>Detalle por condición del {fecha_max.strftime("%d/%m/%Y")} (top 20 por diferencia absoluta)</h4>
     <table style='border-collapse:collapse;font-family:Arial'>
       <thead><tr>{cols_html}</tr></thead>
       <tbody>{filas_html}</tbody>
