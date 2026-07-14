@@ -169,7 +169,8 @@ def init_sqlite(ruta_db: str, reset: bool):
                 Conformidad        TEXT,
                 Canal              TEXT,
                 ID_Sistema         TEXT,
-                ConversationID     TEXT PRIMARY KEY
+                ConversationID     TEXT,
+                PRIMARY KEY (ConversationID, Codigo_Condicion)
             )
         """)
         conn.execute("""

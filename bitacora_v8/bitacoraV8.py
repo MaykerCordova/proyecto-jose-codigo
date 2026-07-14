@@ -29,15 +29,32 @@
 ║                                                                  ║
 ║  Todo lo demás (validación de formato, DUP, Pendientes,         ║
 ║  exportación desde SQLite) igual que V7.                        ║
+║                                                                  ║
+║  5. Apagado masivo (V8.1)                                       ║
+║     → Si el correo trae una tabla pegada desde Excel con la     ║
+║       columna "Condición" y la acción es APAGAR, se genera un   ║
+║       registro por CADA condición de la tabla. Todos comparten  ║
+║       ConversationID, fecha, maker y sustento; cada uno recibe  ║
+║       su propio correlativo.                                    ║
+║     → La llave primaria pasa a ser compuesta:                   ║
+║       (ConversationID, Codigo_Condicion). La migración del      ║
+║       SQLite existente es automática la primera vez que corre   ║
+║       esta versión — no hay que hacer nada manual.              ║
+║     → Estos correos vienen en texto libre, sin etiquetas: todo  ║
+║       campo que no venga etiquetado se completa con los         ║
+║       defaults acordados (ver DEFAULTS_MASIVO). Lo único        ║
+║       dinámico es la tabla: condición por condición.            ║
 ╚══════════════════════════════════════════════════════════════════╝
 """
 
 import os
 import re
 import sqlite3
+import unicodedata
 import win32com.client
 import pandas as pd
 from datetime import datetime
+from html.parser import HTMLParser
 from openpyxl import load_workbook
 from openpyxl.styles import Font, PatternFill, Alignment
 from openpyxl.utils import get_column_letter
@@ -91,6 +108,21 @@ PALABRAS_APROBACION = [
     "VOBO", "PROCEDER", "ACUERDO",
 ]
 
+# Defaults para correos de apagado masivo, que vienen en texto libre
+# sin etiquetas. Si el correo sí trae alguna etiqueta, esta manda.
+# Lo único dinámico es la tabla de condiciones y la acción (APAGAR).
+DEFAULTS_MASIVO = {
+    "Solicitado_Por":    "ENRIQUE",
+    "Herramienta":       "PMFD",
+    "Institucion":       "SBP",
+    "Estatus_Condicion": "PRODUCCIÓN",
+    "Tipo_Condicion":    "TACTICA",
+    "Consideraciones":   "Se apaga regla",
+    "Objetivo":          "REDUCIR ALERTAMIENTO",
+    "Canal":             "TNP",
+}
+ACCION_MASIVO_DEFAULT = "APAGAR"
+
 
 def calcular_estimacion(herramienta: str) -> str:
     h = str(herramienta).strip().upper()
@@ -100,9 +132,60 @@ def calcular_estimacion(herramienta: str) -> str:
     return "ND"
 
 
+def inferir_herramienta(texto: str) -> str:
+    """
+    Busca una herramienta conocida mencionada en texto libre
+    (ej. "...nuestro SET de reglas de PMFD..." → "PMFD").
+    Devuelve "" si no encuentra ninguna.
+    """
+    t = str(texto).upper()
+    for tool in ("PMFD", "RT TD", "RT TC", "VRM", "VCAS", "FRM", "ITC", "CORE"):
+        if re.search(rf"\b{tool.replace(' ', r'\s*')}\b", t):
+            return tool
+    return ""
+
+
 # ══════════════════════════════════════════════════════════════════
 # 3. GESTOR SQLITE — FUENTE DE VERDAD
 # ══════════════════════════════════════════════════════════════════
+
+# Llave primaria compuesta: un correo normal genera 1 fila; un correo
+# de apagado masivo genera N filas (mismo ConversationID, distinta
+# condición). Con ConversationID solo, SQLite rechazaría las N-1 extras.
+SQL_CREAR_BITACORA = """
+    CREATE TABLE IF NOT EXISTS Bitacora (
+        Nro_Correlativo    INTEGER,
+        Fecha              TEXT,
+        Hora               TEXT,
+        Codigo_Generado    TEXT,
+        Maker              TEXT,
+        Solicitado_Por     TEXT,
+        Herramienta        TEXT,
+        Accion             TEXT,
+        Institucion        TEXT,
+        Codigo_Condicion   TEXT,
+        Nombre_Condicion   TEXT,
+        Estatus_Condicion  TEXT,
+        Tipo_Condicion     TEXT,
+        Consideraciones    TEXT,
+        Objetivo           TEXT,
+        Estimacion         TEXT,
+        Sustento           TEXT,
+        Sustento_Respuesta TEXT,
+        Checker            TEXT,
+        Fecha_Revision     TEXT,
+        Hora_Revision      TEXT,
+        Mes_Revision       TEXT,
+        Anio_Revision      TEXT,
+        Enviado_Jefatura   TEXT,
+        Conformidad        TEXT,
+        Canal              TEXT,
+        ID_Sistema         TEXT,
+        ConversationID     TEXT,
+        PRIMARY KEY (ConversationID, Codigo_Condicion)
+    )
+"""
+
 
 class GestorBackupSQL:
 
@@ -113,38 +196,8 @@ class GestorBackupSQL:
     def _init_tablas(self):
         os.makedirs(os.path.dirname(self.ruta_db), exist_ok=True)
         with sqlite3.connect(self.ruta_db) as conn:
-            conn.execute("""
-                CREATE TABLE IF NOT EXISTS Bitacora (
-                    Nro_Correlativo    INTEGER,
-                    Fecha              TEXT,
-                    Hora               TEXT,
-                    Codigo_Generado    TEXT,
-                    Maker              TEXT,
-                    Solicitado_Por     TEXT,
-                    Herramienta        TEXT,
-                    Accion             TEXT,
-                    Institucion        TEXT,
-                    Codigo_Condicion   TEXT,
-                    Nombre_Condicion   TEXT,
-                    Estatus_Condicion  TEXT,
-                    Tipo_Condicion     TEXT,
-                    Consideraciones    TEXT,
-                    Objetivo           TEXT,
-                    Estimacion         TEXT,
-                    Sustento           TEXT,
-                    Sustento_Respuesta TEXT,
-                    Checker            TEXT,
-                    Fecha_Revision     TEXT,
-                    Hora_Revision      TEXT,
-                    Mes_Revision       TEXT,
-                    Anio_Revision      TEXT,
-                    Enviado_Jefatura   TEXT,
-                    Conformidad        TEXT,
-                    Canal              TEXT,
-                    ID_Sistema         TEXT,
-                    ConversationID     TEXT PRIMARY KEY
-                )
-            """)
+            self._migrar_pk_compuesta(conn)
+            conn.execute(SQL_CREAR_BITACORA)
             conn.execute("""
                 CREATE TABLE IF NOT EXISTS Bitacora_Pendientes (
                     id               INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -159,6 +212,23 @@ class GestorBackupSQL:
                 )
             """)
             conn.commit()
+
+    def _migrar_pk_compuesta(self, conn):
+        # SQLite no permite alterar la PK de una tabla existente:
+        # se renombra, se crea con la llave nueva y se copian los datos.
+        # Solo actúa si detecta el esquema V8 viejo (PK = ConversationID).
+        info = conn.execute("PRAGMA table_info(Bitacora)").fetchall()
+        if not info:
+            return
+        pks = [col[1] for col in info if col[5] > 0]
+        if pks != ["ConversationID"]:
+            return
+        print("  🔧 [SQLite] Migrando llave primaria a (ConversationID, Codigo_Condicion)...")
+        conn.execute("ALTER TABLE Bitacora RENAME TO Bitacora_v8_old")
+        conn.execute(SQL_CREAR_BITACORA)
+        conn.execute("INSERT INTO Bitacora SELECT * FROM Bitacora_v8_old")
+        conn.execute("DROP TABLE Bitacora_v8_old")
+        print("  🔧 [SQLite] Migración completada.")
 
     def get_max_correlativo(self) -> int:
         with sqlite3.connect(self.ruta_db) as conn:
@@ -399,6 +469,122 @@ class ProcesadorTexto:
 
 
 # ══════════════════════════════════════════════════════════════════
+# 6b. PROCESADOR DE TABLA — APAGADO MASIVO
+#     Cuando el Maker pega una tabla de Excel en el correo con una
+#     columna "Condición", cada fila se registra como un apagado.
+#     Se lee del HTMLBody porque la tabla pegada llega como <table>
+#     real — el Body en texto plano es frágil (tabs que se pierden).
+# ══════════════════════════════════════════════════════════════════
+
+def _normalizar(texto: str) -> str:
+    """minúsculas y sin tildes, para comparar encabezados."""
+    t = unicodedata.normalize("NFD", str(texto))
+    t = "".join(c for c in t if unicodedata.category(c) != "Mn")
+    return t.strip().lower()
+
+
+class _ExtractorTablasHTML(HTMLParser):
+    """Convierte cada <table> del HTML en una lista de filas de texto."""
+
+    def __init__(self):
+        super().__init__(convert_charrefs=True)
+        self.tablas       = []
+        self._pila_tablas = []
+        self._fila        = None
+        self._celda       = None
+
+    def handle_starttag(self, tag, attrs):
+        if tag == "table":
+            self._pila_tablas.append([])
+        elif tag == "tr" and self._pila_tablas:
+            self._fila = []
+        elif tag in ("td", "th") and self._fila is not None:
+            self._celda = []
+
+    def handle_endtag(self, tag):
+        if tag in ("td", "th") and self._celda is not None:
+            self._fila.append(" ".join("".join(self._celda).split()))
+            self._celda = None
+        elif tag == "tr" and self._fila is not None:
+            self._pila_tablas[-1].append(self._fila)
+            self._fila = None
+        elif tag == "table" and self._pila_tablas:
+            tabla = self._pila_tablas.pop()
+            if tabla:
+                self.tablas.append(tabla)
+
+    def handle_data(self, data):
+        if self._celda is not None:
+            self._celda.append(data)
+
+
+class ProcesadorTabla:
+
+    @staticmethod
+    def extraer_condiciones(html_body: str) -> list:
+        """
+        Busca en el HTML del correo una tabla cuyo encabezado tenga la
+        columna "Condición" y devuelve una lista de dicts:
+        [{"codigo": ..., "nombre": ..., "accion": ...}, ...]
+        Lista vacía si no hay tabla de condiciones.
+        """
+        if not html_body:
+            return []
+        parser = _ExtractorTablasHTML()
+        try:
+            parser.feed(html_body)
+        except Exception:
+            return []
+        for tabla in parser.tablas:
+            condiciones = ProcesadorTabla._leer_tabla(tabla)
+            if condiciones:
+                return condiciones
+        return []
+
+    @staticmethod
+    def _leer_tabla(tabla: list) -> list:
+        # Encabezado: fila que tenga una celda exactamente "condición"
+        # (match exacto para no confundirla con "código de condición").
+        idx_header, headers = None, []
+        for i, fila in enumerate(tabla):
+            headers = [_normalizar(c) for c in fila]
+            if any(h in ("condicion", "condiciones") for h in headers):
+                idx_header = i
+                break
+        if idx_header is None:
+            return []
+
+        def _buscar_col(criterio):
+            for j, h in enumerate(headers):
+                if criterio(h):
+                    return j
+            return None
+
+        col_cond   = _buscar_col(lambda h: h in ("condicion", "condiciones"))
+        col_nombre = _buscar_col(lambda h: h.startswith("nombre"))
+        col_accion = _buscar_col(lambda h: h in ("accion", "acciones"))
+
+        condiciones, vistos = [], set()
+        for fila in tabla[idx_header + 1:]:
+            if col_cond >= len(fila):
+                continue
+            codigo = fila[col_cond].strip()
+            if not codigo or codigo in vistos:
+                continue
+            vistos.add(codigo)
+
+            def _valor(col):
+                return fila[col].strip() if col is not None and col < len(fila) else ""
+
+            condiciones.append({
+                "codigo": codigo,
+                "nombre": _valor(col_nombre),
+                "accion": _valor(col_accion),
+            })
+        return condiciones
+
+
+# ══════════════════════════════════════════════════════════════════
 # 7. ORQUESTADOR PRINCIPAL
 # ══════════════════════════════════════════════════════════════════
 
@@ -447,8 +633,37 @@ def main():
 
                 print(f"  [+] Nuevo ticket: {id_sys}")
 
-                d                = ProcesadorTexto.parsear_cuerpo(m.Body)
-                campos_faltantes = ProcesadorTexto.validar_formato(d)
+                d = ProcesadorTexto.parsear_cuerpo(m.Body)
+
+                # ── Detección de apagado masivo: tabla con columna
+                #    "Condición" + acción APAGAR (en el cuerpo o en la tabla)
+                try:
+                    condiciones_tabla = ProcesadorTabla.extraer_condiciones(m.HTMLBody)
+                except Exception:
+                    condiciones_tabla = []
+
+                es_masivo = bool(condiciones_tabla) and (
+                    "APAGA" in d.get("Accion", "").upper()
+                    or any("APAGA" in c["accion"].upper() for c in condiciones_tabla)
+                )
+
+                if es_masivo:
+                    # Las condiciones vienen de la tabla; el resto del
+                    # correo es texto libre. Todo campo sin etiqueta se
+                    # completa con su default — el correo masivo nunca
+                    # cae a Pendientes. La herramienta, además, se
+                    # intenta inferir del texto antes de usar el default.
+                    if d["Herramienta"].strip() in ("-", "", "N/A", "n/a"):
+                        d["Herramienta"] = (
+                            inferir_herramienta(m.Body)
+                            or DEFAULTS_MASIVO["Herramienta"]
+                        )
+                    for campo, default in DEFAULTS_MASIVO.items():
+                        if d.get(campo, "-").strip() in ("-", "", "N/A", "n/a"):
+                            d[campo] = default
+                    campos_faltantes = []
+                else:
+                    campos_faltantes = ProcesadorTexto.validar_formato(d)
 
                 if campos_faltantes:
                     sql.registrar_pendiente(
@@ -464,51 +679,74 @@ def main():
                     pendientes += 1
                     continue
 
-                correlativo  = sql.get_max_correlativo() + 1
-                parte_corr   = f"{correlativo:04d}"
-                parte_fecha  = m.SentOn.strftime("%d%m%y")
-                parte_tool   = d["Herramienta"].strip()
-                parte_insti  = d["Institucion"].strip()
-                parte_cond   = d["Codigo_Condicion"].strip()
-                cod_generado = f"{parte_corr}{parte_fecha}{parte_tool}{parte_insti}{parte_cond}"
+                if es_masivo:
+                    print(f"  📋 Apagado masivo: {len(condiciones_tabla)} condiciones en la tabla")
+                    items = [
+                        {
+                            "Accion":            c["accion"].upper() or ACCION_MASIVO_DEFAULT,
+                            "Codigo_Condicion":  c["codigo"],
+                            "Nombre_Condicion":  c["nombre"] or c["codigo"],
+                        }
+                        for c in condiciones_tabla
+                    ]
+                else:
+                    items = [{
+                        "Accion":            d["Accion"],
+                        "Codigo_Condicion":  d["Codigo_Condicion"],
+                        "Nombre_Condicion":  d["Nombre_Condicion"],
+                    }]
 
-                ruta_msg = outlook.guardar_msg(m, f"REQ_{id_sys}")
+                correlativo_base = sql.get_max_correlativo()
+                ruta_msg         = outlook.guardar_msg(m, f"REQ_{id_sys}")
 
-                fila = {
-                    "Nro_Correlativo":   correlativo,
-                    "Fecha":             m.SentOn.strftime("%d/%m/%Y"),
-                    "Hora":              m.SentOn.strftime("%H:%M"),
-                    "Codigo_Generado":   cod_generado,
-                    "Maker":             m.SenderName,
-                    "Solicitado_Por":    d.get("Solicitado_Por", "-"),
-                    "Herramienta":       d["Herramienta"],
-                    "Accion":            d["Accion"],
-                    "Institucion":       d["Institucion"],
-                    "Codigo_Condicion":  d["Codigo_Condicion"],
-                    "Nombre_Condicion":  d["Nombre_Condicion"],
-                    "Estatus_Condicion": d.get("Estatus_Condicion", "-"),
-                    "Tipo_Condicion":    d.get("Tipo_Condicion", "-"),
-                    "Consideraciones":   d.get("Consideraciones", "-"),
-                    "Objetivo":          d.get("Objetivo", "-"),
-                    "Estimacion":        calcular_estimacion(d["Herramienta"]),
-                    "Sustento":          ruta_msg,
-                    "Sustento_Respuesta": "-",
-                    "Checker":           "-",
-                    "Fecha_Revision":    "-",
-                    "Hora_Revision":     "-",
-                    "Mes_Revision":      "-",
-                    "Anio_Revision":     "-",
-                    "Enviado_Jefatura":  "SI",
-                    "Conformidad":       "Pendiente",
-                    "Canal":             d.get("Canal", "-"),
-                    "ID_Sistema":        id_sys,
-                    "ConversationID":    conv_id,
-                }
+                for i, item in enumerate(items):
+                    correlativo  = correlativo_base + 1 + i
+                    parte_corr   = f"{correlativo:04d}"
+                    parte_fecha  = m.SentOn.strftime("%d%m%y")
+                    parte_tool   = d["Herramienta"].strip()
+                    parte_insti  = d["Institucion"].strip()
+                    parte_cond   = item["Codigo_Condicion"].strip()
+                    cod_generado = f"{parte_corr}{parte_fecha}{parte_tool}{parte_insti}{parte_cond}"
 
-                sql.insertar_solicitud(fila)
+                    fila = {
+                        "Nro_Correlativo":   correlativo,
+                        "Fecha":             m.SentOn.strftime("%d/%m/%Y"),
+                        "Hora":              m.SentOn.strftime("%H:%M"),
+                        "Codigo_Generado":   cod_generado,
+                        "Maker":             m.SenderName,
+                        "Solicitado_Por":    d.get("Solicitado_Por", "-"),
+                        "Herramienta":       d["Herramienta"],
+                        "Accion":            item["Accion"],
+                        "Institucion":       d["Institucion"],
+                        "Codigo_Condicion":  item["Codigo_Condicion"],
+                        "Nombre_Condicion":  item["Nombre_Condicion"],
+                        "Estatus_Condicion": d.get("Estatus_Condicion", "-"),
+                        "Tipo_Condicion":    d.get("Tipo_Condicion", "-"),
+                        "Consideraciones":   d.get("Consideraciones", "-"),
+                        "Objetivo":          d.get("Objetivo", "-"),
+                        "Estimacion":        calcular_estimacion(d["Herramienta"]),
+                        "Sustento":          ruta_msg,
+                        "Sustento_Respuesta": "-",
+                        "Checker":           "-",
+                        "Fecha_Revision":    "-",
+                        "Hora_Revision":     "-",
+                        "Mes_Revision":      "-",
+                        "Anio_Revision":     "-",
+                        "Enviado_Jefatura":  "SI",
+                        "Conformidad":       "Pendiente",
+                        "Canal":             d.get("Canal", "-"),
+                        "ID_Sistema":        id_sys,
+                        "ConversationID":    conv_id,
+                    }
+                    sql.insertar_solicitud(fila)
+
                 m.UnRead = False
-                cambios  += 1
-                print(f"  ✔  Correlativo: {correlativo:04d}\n")
+                cambios  += len(items)
+                if len(items) == 1:
+                    print(f"  ✔  Correlativo: {correlativo_base + 1:04d}\n")
+                else:
+                    print(f"  ✔  Correlativos: {correlativo_base + 1:04d} – "
+                          f"{correlativo_base + len(items):04d}\n")
 
             except Exception as e:
                 print(f"  ▲ Error solicitud [{getattr(m, 'Subject', '?')[:60]}]: {e}")
