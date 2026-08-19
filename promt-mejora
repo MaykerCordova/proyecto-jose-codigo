@@ -1,0 +1,67 @@
+**PROMPT FINAL (para tu asistente de código):**
+
+Tengo un archivo parquet con transacciones de clientes viajeros de un banco (data de Monitor, ya limpia: montos y fechas correctos, resto de columnas como texto). La columna que marca cliente viajero usa el valor "CV". Quiero un análisis exploratorio de datos (EDA) en Python (pandas, matplotlib/seaborn) con esta estructura:
+
+**Paso 1 — Filtrado y segmentación base**
+- Filtra por tarjeta presente (entry mode 05, 07, 90) y tarjeta de crédito.
+- Identifica la columna de segmento de cliente (Billón, Premium, Estándar, etc.).
+- Para el **baseline de comportamiento normal**, usa únicamente transacciones **aprobadas**, excluyendo los códigos de respuesta 59 y 63 (para no sesgar el análisis con los mismos casos que se van a evaluar después).
+
+**Paso 2 — Análisis general del baseline (aprobadas, sin 59/63)**
+Estadísticas descriptivas y 6 gráficas:
+
+1. Distribución de montos (histograma + boxplot: promedio, máximo, mínimo, mediana)
+2. Top MCC / giros de comercio más frecuentes
+3. Top comercios más frecuentes
+4. Transacciones diarias (serie de tiempo) y promedio de transacciones por cliente
+5. Distribución por país del comercio (marcar como hallazgo si aparece Perú, ya que es atípico en tarjeta presente de viaje)
+6. Franja horaria (validar si la fecha/hora viene en hora local; si no, dejarlo señalado como pendiente)
+
+Por cliente, calcular además:
+- Monto acumulado en el periodo
+- Velocidad entre transacciones (tiempo entre transacción y la siguiente del mismo cliente)
+- Score de la marca (Visa/Mastercard), si está disponible
+
+**Paso 3 — Repetir el Paso 2 por segmento de cliente** (Billón, Premium, Estándar, etc.)
+
+**Paso 4 — Casos de prueba (códigos 59 y 63)**
+Filtra las transacciones con código 59 y 63 (excluidas del baseline). Para cada una, muestra sus variables (monto, MCC, score, país, hora, velocidad respecto a transacciones previas del cliente) y compáralas contra el baseline del Paso 2/3, para evaluar si habrían calificado como comportamiento normal.
+
+**Paso 5 — Comparación contra fraude real (master file, código 8850)**
+Filtra: tarjeta presente, crédito, extranjero, últimos 6 meses. Genera las mismas estadísticas/gráficas del Paso 2 para comparar visualmente el comportamiento del fraude contra el baseline normal.
+
+**Paso 6 — Dashboard de seguimiento (para monitoreo post-piloto)**
+Como este seria un piloto/modelo en producción, prepara también agregaciones diarias/mensuales para: tasa de aprobación vs. declinación, volumen de transacciones que activarían el bypass vs. evaluación normal, fraude detectado dentro del grupo que pasó el bypass, y evolución de las variables del patrón (monto, franja horaria) por periodo para detectar drift respecto al baseline. (Estas agregaciones luego se llevarán a Power BI para el dashboard de seguimiento.)
+
+Código modular, una función por paso, para poder correr y revisar antes de avanzar al siguiente.
+
+---
+
+**GUÍA PARA LA REUNIÓN:**
+
+**1. Contexto y objetivo**
+- Pedido de tu jefe (client experience): el área de fraude percibida como rígida.
+- Foco: clientes viajeros, por reclamos de tarjetas declinadas en viaje.
+- Meta: reglas de bypass para no alertar a clientes viajeros con comportamiento normal.
+
+**2. Metodología**
+- Segmentación: cliente viajero (CV) → tarjeta presente vs. no presente → dentro de presente, crédito vs. débito → por segmento de cliente.
+- Baseline: solo transacciones aprobadas, excluyendo 59/63.
+- Variables: monto, MCC, comercios frecuentes, score, franja horaria, velocidad entre transacciones, monto acumulado, país del comercio.
+- Validación contra fraude real (master file 8850, 6 meses, tarjeta presente + crédito + extranjero).
+
+**3. Hallazgos**
+- Ecommerce: 16 fraudes por saque de numeración durante viaje.
+- Tarjeta presente crédito: sin fraude, pero 16 denegadas con código 59 y 16 con código 63 (~32 clientes con fricción).
+- Anomalía: transacciones con país de comercio = Perú en cliente viajero de tarjeta presente (hipótesis: regreso anticipado del viaje, marca CV aún activa).
+
+**4. Preguntas para tu jefe**
+- ¿Cómo tratar códigos de denegación distintos a 59/63 (ej. 51, 57)?
+- ¿La fecha/hora de Monitor viene en hora local del comercio?
+- ¿Se puede obtener el país o países declarados en el aviso de viaje, para cruzar contra el país del comercio?
+- Caso "país comercio Perú" con CV activo: ¿se excluye del análisis o se trata como válido?
+- ¿Cómo se implementa técnicamente el bypass en la cascada de Monitor? (CV + patrón normal → aprueba directo; CV sin ese patrón → ¿declina o sigue evaluación normal?)
+
+**5. Recomendación a proponer**
+- Correr el bypass en modo "sombra" sobre data histórica antes de activarlo en producción.
+- Tratar el proyecto como un piloto: necesita seguimiento continuo (construcción, seguimiento, validación), con un dashboard evolutivo en Power BI — tasa de aprobación/declinación, volumen de bypass activado, fraude post-bypass, y evolución del patrón por periodo (drift) — porque el comportamiento del cliente viajero no es estático.
