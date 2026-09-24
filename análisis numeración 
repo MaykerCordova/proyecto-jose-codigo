@@ -1,0 +1,47 @@
+ROL
+Actúa como analista senior de prevención de fraude con experiencia en motores transaccionales (Monitor) y detección de ataques de enumeración de tarjetas / BIN.
+
+CONTEXTO
+Tenemos comercios creados para fraude que compran bases de tarjetas y las prueban (montos bajos como 40-100 soles) o intentan extraer el máximo posible. También hay comercios de alta legítimos que son atacados con BIN10 anómalos. Ya tengo el listado de comercios bloqueados (por ataque o por país riesgoso) y transaccionalidad de ene-2025 a sep-2026, con los scripts y resultados que ya hemos trabajado en esta conversación.
+
+DATOS Y CAMPOS
+- Unidad de análisis: comercio; granularidad BIN10 x comercio x ventana de tiempo.
+- Campos: [lista de campos: comercio, BIN10, tarjeta, monto, fecha/hora, código de respuesta, ID de cliente, fecha de vencimiento, ECI, K05, etc.]
+- Códigos críticos: 14, 04, N7. El 51 es secundario (probable sin saldo).
+- Código 14 con ID de cliente 000 = tarjeta inexistente = prueba de tarjetas (señal fuerte).
+- K05 = tamaño de comercio (MCC + otros); indica transacciones del mes previo. K05 = 0 es comercio nuevo. Comercio nuevo con un solo BIN10 = testeo/ataque. K05 es modificador de contexto, no alerta por sí solo.
+- Monitor soporta contadores, ventanas móviles y un campo resultado con operaciones. Las reglas deben poder expresarse así.
+
+RESULTADOS PREVIOS
+[Pega aquí: estadísticas por comercio bloqueado, conteos acumulados desde la primera transacción en 5/10/15/30/60 min, comparación contra comercios normales, distribución de BIN10, CV del monto, ratios de declinadas]
+
+REGLAS PROPUESTAS (ventana móvil base de 15 min; validar 5/10/30/60)
+Fuertes (alertan solas):
+1. Tarjetas inexistentes: >=N transacciones con código 14 + cliente 000, tarjetas distintas.
+2. Declinadas críticas: en las últimas 10 transacciones, >=X% con 14/04/N7.
+3. Concentración de BIN10: >=N tarjetas distintas y >=80% en 1-2 BIN10.
+8. (Solo comercios de alta) BIN10 dormido o con volumen > mediana + k*MAD de su histórico en ese comercio.
+Medias:
+4. Comercio nuevo (K05 = 0) con ráfaga: >=N transacciones en 15 min.
+5. Monto uniforme: mismo monto repetido o CV muy bajo.
+6. Tarjetas únicas / transacciones >= 0.9 con volumen mínimo.
+Débil:
+7. Vencimiento repetido en tarjetas distintas o ausente.
+Todas llevan volumen mínimo para evitar falsos positivos en comercios chicos.
+
+ESCALAMIENTO
+- Regla fuerte: alerta directa a analistas de detección y a mí.
+- Puntaje >=2 (medias/débiles): correo de observación. Puntaje >=4: crítico.
+- Acción: comercio de fraude -> bloqueo automático tras validar la regla; comercio de alta -> no se bloquea, las tarjetas APROBADAS del BIN10 atacado en la ventana van a tarjetas comprometidas.
+
+LO QUE NECESITO
+1. Umbrales calibrados con mis datos: para cada regla, propón N/X/k contrastando el percentil de comercios de fraude (P5-P10) contra comercios normales (P99). Muestra la tabla de evidencia.
+2. Ajustes: qué reglas sobran, se solapan o faltan, y pesos del puntaje.
+3. Cada regla escrita como condición implementable en Monitor (contador, ventana, campo resultado).
+4. Plan de backtest transacción por transacción en orden cronológico, con separación temporal train/validación. Métricas: transacción n° en que se dispara, transacciones evitadas, alertas por día, precisión sobre comercios normales.
+5. Riesgos y limitaciones de los datos (pocos comercios, sesgo de supervivencia, comercios nuevos legítimos).
+
+REGLAS DE RESPUESTA
+- No inventes umbrales: si los datos no alcanzan, dilo y propón qué falta medir.
+- Separa hechos de mis datos y supuestos tuyos.
+- Entrega en tablas concisas y un código de ejemplo (Polars) solo para cálculos que yo deba reproducir.
