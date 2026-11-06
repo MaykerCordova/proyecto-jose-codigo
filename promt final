@@ -1,0 +1,451 @@
+PROYECTO: ANÁLISIS DE ATRIBUCIÓN DEL INCREMENTO DEL FRAUDE DIGITAL Y PLAN DE SEGUIMIENTO
+
+1. CONTEXTO Y OBJETIVO DEL ANÁLISIS
+
+Necesito desarrollar un análisis exploratorio y de atribución que permita explicar el incremento del monto de fraude registrado durante octubre, identificar los principales factores que lo impulsaron y establecer un esquema de seguimiento para noviembre.
+
+El análisis debe tener un enfoque de negocio y analítica de datos. No busco únicamente estadísticas descriptivas o rankings, sino identificar qué cambió respecto a los meses anteriores, dónde se concentra el incremento, cuáles son sus principales impulsores y qué acciones deberían evaluarse.
+
+El resultado debe permitir construir una historia analítica que pueda presentarse a la gerencia y utilizarse como sustento para los comités de riesgo.
+
+Contexto del problema
+
+Se ha observado un incremento importante del fraude durante octubre:
+
+- Por fecha de cierre, octubre registra aproximadamente S/ 1.5 millones.
+- Por fecha de transacción, octubre registra aproximadamente S/ 1.2 millones.
+- Septiembre cerró aproximadamente en S/ 1.1 millones por fecha de cierre.
+- Agosto presentó aproximadamente S/ 900 mil por fecha de cierre.
+
+Estas cifras son referenciales y deben validarse contra los datos.
+
+El incremento de octubre genera preocupación porque se observa un comportamiento distinto al de los meses anteriores.
+
+Es importante comprender que existen dos perspectivas:
+
+Fecha de transacción: representa el momento en que ocurrió la operación fraudulenta. Es la perspectiva principal para analizar tendencias, comportamiento y evolución del fraude.
+
+Fecha de cierre: representa el momento en que se calificó o cerró el caso. Es la perspectiva utilizada para reportar los indicadores del CRI. Un mes de cierre puede incluir fraudes ocurridos durante ese mismo mes y durante meses anteriores, dependiendo de cuándo fueron investigados y calificados.
+
+Por lo tanto, el análisis debe realizarse para ambas fechas, pero sin mezclar sus interpretaciones.
+
+2. OBJETIVO GENERAL
+
+Explicar el incremento del fraude de octubre mediante un análisis jerárquico que permita identificar:
+
+1. Si el incremento se explica por una mayor cantidad de clientes afectados, más transacciones o mayores importes transaccionales.
+2. Qué canales digitales explican principalmente la variación.
+3. Qué entidades financieras receptoras impulsan el incremento, especialmente dentro de las transferencias inmediatas.
+4. Qué características cambiaron dentro de las entidades prioritarias.
+5. Qué segmentos, tipologías, rangos de monto y comportamientos concentran el problema.
+6. Qué factores explican la mayor proporción del incremento mediante un análisis de Pareto.
+7. Qué indicadores debemos monitorear durante noviembre para detectar cambios y anticiparnos a nuevos focos de fraude.
+
+3. METODOLOGÍA ANALÍTICA
+
+El análisis debe desarrollarse de lo general a lo particular. No se debe profundizar en todas las variables simultáneamente sin identificar previamente dónde se concentra la variación.
+
+ETAPA 1. EVOLUCIÓN GENERAL DEL FRAUDE
+
+Realizar una comparación de agosto, septiembre y octubre.
+
+Ejecutar el análisis por:
+
+- Fecha de transacción.
+- Fecha de cierre.
+
+Calcular los siguientes indicadores:
+
+Indicador| Definición
+Monto total| Suma del monto de fraude.
+Clientes afectados| Cantidad de clientes únicos.
+Transacciones| Cantidad de operaciones fraudulentas.
+Ticket promedio transaccional| Monto total / transacciones.
+Ticket promedio por cliente| Monto total / clientes únicos.
+Frecuencia transaccional| Transacciones / clientes únicos.
+
+Calcular variaciones absolutas y porcentuales entre meses.
+
+Preguntas que debe responder:
+
+- ¿Cuánto aumentó o disminuyó el fraude en octubre respecto a septiembre y agosto?
+- ¿El incremento se explica principalmente por más clientes afectados?
+- ¿Se mantuvo la cantidad de clientes, pero aumentó el número de transacciones?
+- ¿Aumentó el ticket promedio por transacción?
+- ¿Aumentó el monto promedio de fraude por cliente?
+- ¿Se incrementó la frecuencia transaccional por cliente?
+- ¿Qué combinación de factores explica el crecimiento?
+
+Descomponer matemáticamente el monto:
+
+Monto total = Clientes únicos × Transacciones por cliente × Ticket promedio transaccional.
+
+Analizar conjuntamente el ticket por transacción y el ticket por cliente para identificar si el crecimiento responde a operaciones más costosas o a una mayor intensidad transaccional por cliente.
+
+No atribuir causalidad automáticamente. Identificar qué componentes presentan mayor variación y cuantificar su contribución al crecimiento.
+
+Entregable: tabla comparativa mensual, gráficos de evolución y resumen ejecutivo de los principales impulsores del incremento.
+
+ETAPA 2. DESCOMPOSICIÓN POR CANALES DIGITALES
+
+Segmentar el fraude digital en los siguientes canales:
+
+1. Transferencias inmediatas.
+2. Transferencias a terceros.
+3. Pasarelas de pago.
+4. Yape/Plin.
+5. Otros.
+
+Comparar agosto, septiembre y octubre.
+
+Calcular por canal:
+
+- Monto total de fraude.
+- Participación sobre el fraude digital total.
+- Variación absoluta mensual.
+- Variación porcentual mensual.
+- Contribución al incremento neto del fraude.
+- Cantidad de clientes.
+- Cantidad de transacciones.
+- Ticket promedio transaccional.
+- Ticket promedio por cliente.
+- Frecuencia transaccional.
+
+Distinguir dos conceptos:
+
+Participación: porcentaje que representa el canal sobre el monto total de fraude.
+
+Contribución: porcentaje del incremento monetario total explicado por la variación del canal.
+
+Utilizar la siguiente fórmula:
+
+Contribución del canal = Variación del monto del canal / Variación del monto total.
+
+Identificar:
+
+- ¿Qué canal explica la mayor parte del incremento de octubre?
+- ¿Qué canales crecieron y cuáles disminuyeron?
+- ¿El incremento se encuentra concentrado en un único canal o distribuido entre varios?
+- ¿Qué factores explican el comportamiento del canal principal?
+
+Entregable: tabla de variaciones por canal, gráfico de contribución y ranking de canales según su aporte al incremento.
+
+ETAPA 3. ANÁLISIS DE ENTIDADES FINANCIERAS RECEPTORAS
+
+Si las transferencias inmediatas representan el principal impulsor, profundizar en las entidades financieras receptoras.
+
+Recordar que estas operaciones corresponden a clientes de Scotiabank que realizan transferencias hacia otras entidades financieras.
+
+Comparar las entidades receptoras de agosto, septiembre y octubre.
+
+Identificar tres posibles escenarios:
+
+Escenario A: Concentración en una entidad.
+
+Determinar si una sola entidad explica una proporción importante del incremento.
+
+Escenario B: Incremento distribuido.
+
+Determinar si varias entidades presentan incrementos simultáneos que, en conjunto, explican el crecimiento.
+
+Escenario C: Aparición de nuevas entidades.
+
+Identificar entidades que comienzan a presentar operaciones fraudulentas en septiembre u octubre y que no tenían registros en los períodos anteriores.
+
+No considerar automáticamente como nueva una entidad que simplemente no aparecía en el Top 10. Validar su existencia en la totalidad de los registros históricos disponibles.
+
+Para cada entidad calcular:
+
+- Monto de fraude.
+- Variación absoluta y porcentual.
+- Contribución al incremento de transferencias inmediatas.
+- Número de clientes afectados.
+- Número de transacciones.
+- Ticket promedio transaccional.
+- Ticket promedio por cliente.
+- Frecuencia transaccional.
+- Participación dentro del canal.
+- Evolución mensual.
+
+Preguntas que debe responder:
+
+- ¿Qué entidades explican el incremento?
+- ¿Cuál es la entidad con mayor contribución?
+- ¿El incremento se concentra en una entidad o en varias?
+- ¿Existen entidades nuevas?
+- ¿Cuáles son las entidades prioritarias para profundizar?
+
+Entregable: ranking de entidades por contribución al incremento, evolución mensual y clasificación de los tres escenarios anteriores.
+
+ETAPA 4. PROFUNDIZACIÓN EN LAS ENTIDADES PRIORITARIAS
+
+Una vez identificadas las entidades que explican la mayor parte del incremento, realizar un análisis individual para cada una.
+
+Comparar agosto, septiembre y octubre.
+
+Evaluar las siguientes dimensiones:
+
+A. Clientes y transacciones
+
+- Clientes únicos afectados.
+- Número de transacciones.
+- Frecuencia transaccional por cliente.
+- Concentración de operaciones en determinados clientes.
+
+B. Montos
+
+- Ticket promedio por transacción.
+- Ticket promedio por cliente.
+- Distribución de montos.
+- Rangos de monto.
+- Cambio en la concentración hacia importes mayores o menores.
+
+Construir rangos de monto comparables entre meses. Evaluar si el fraude se desplazó hacia rangos superiores.
+
+C. Tipología de fraude
+
+- Distribución del tipo de fraude.
+- Variación de las principales tipologías.
+- Aparición de nuevas modalidades.
+- Concentración del monto por tipo de fraude.
+
+D. Perfil del cliente
+
+- Distribución por rango de edad.
+- Segmento comercial.
+- Variación de la participación de cada segmento.
+- Identificación de segmentos que aumentaron su exposición.
+
+E. Comportamiento temporal
+
+- Distribución por hora.
+- Distribución por día de la semana.
+- Concentración en determinados horarios.
+- Cantidad de transacciones por cliente en períodos cortos.
+- Cambios en la velocidad o frecuencia de las operaciones.
+
+Preguntas que debe responder:
+
+- ¿Qué cambió específicamente en cada entidad?
+- ¿Qué segmentos concentran el incremento?
+- ¿Se observa un cambio en el perfil de los clientes afectados?
+- ¿Cambió la tipología predominante?
+- ¿Se desplazaron las operaciones hacia montos mayores?
+- ¿Cambió el horario o la frecuencia de las transacciones?
+- ¿Qué características distinguen octubre de los meses anteriores?
+
+No limitarse a presentar distribuciones. Identificar cambios en términos absolutos y relativos, considerando el tamaño de cada grupo.
+
+ETAPA 5. ANÁLISIS DE PARETO Y PRIORIZACIÓN
+
+Aplicar el principio de Pareto para identificar los factores que explican la mayor proporción del incremento.
+
+Realizar el análisis de manera jerárquica:
+
+1. Canales.
+2. Entidades receptoras dentro del canal prioritario.
+3. Segmentos dentro de las entidades prioritarias.
+4. Tipologías de fraude.
+5. Rangos de monto y horarios.
+
+Ordenar los factores por contribución monetaria positiva y calcular la contribución acumulada.
+
+Identificar los elementos que explican aproximadamente el 80% del incremento.
+
+Distinguir entre:
+
+- Factores que impulsan el incremento.
+- Factores que compensan el incremento.
+- Factores sin cambios relevantes.
+
+No forzar una distribución 80/20 si los datos no la respaldan.
+
+El objetivo es determinar dónde debemos concentrar nuestros esfuerzos de investigación y control.
+
+Entregable: tablas de Pareto y ranking de factores prioritarios, con monto incremental y contribución acumulada.
+
+4. PLAN DE SEGUIMIENTO PARA NOVIEMBRE
+
+Después de explicar el comportamiento de octubre, establecer un esquema de monitoreo para noviembre.
+
+Utilizar octubre como mes de referencia y agosto y septiembre como antecedentes históricos.
+
+El seguimiento debe permitir identificar si los patrones observados en octubre continúan, disminuyen o se desplazan hacia otras entidades, canales o segmentos.
+
+4.1. Línea base
+
+Construir una línea base histórica para:
+
+- Canales.
+- Entidades receptoras.
+- Segmentos.
+- Tipologías.
+- Rangos de monto.
+
+Utilizar tanto los montos como los indicadores de clientes, transacciones, ticket y frecuencia.
+
+4.2. Indicadores de seguimiento
+
+Proponer un tablero de monitoreo con:
+
+Dimensión| Indicadores
+Magnitud| Monto de fraude y variación acumulada.
+Clientes| Clientes únicos afectados y nuevos clientes afectados.
+Transacciones| Cantidad y frecuencia por cliente.
+Severidad| Ticket promedio por transacción y cliente.
+Concentración| Canal, entidad y segmento.
+Tipología| Distribución y variación de tipos de fraude.
+Comportamiento| Rangos de monto, horarios y velocidad transaccional.
+
+4.3. Detección de desviaciones
+
+Proponer metodologías para detectar cambios durante noviembre:
+
+- Comparación del acumulado de noviembre contra el mismo número de días de octubre.
+- Comparación contra el comportamiento histórico de agosto y septiembre.
+- Promedios móviles.
+- Percentiles históricos.
+- Variaciones porcentuales.
+- Desviaciones respecto a una línea base.
+- Seguimiento de nuevas entidades receptoras.
+- Seguimiento de cambios en segmentos y tipologías.
+
+Considerar que el mes de noviembre está en curso. No comparar meses completos contra períodos parciales sin normalizar la ventana temporal.
+
+Proponer umbrales basados en el comportamiento histórico y evitar definir límites arbitrarios sin sustento.
+
+4.4. Matriz de alertas y acciones
+
+Construir una matriz que relacione:
+
+- Indicador monitoreado.
+- Condición que genera una señal.
+- Interpretación del comportamiento.
+- Posible riesgo.
+- Acción recomendada.
+- Frecuencia de seguimiento.
+
+Diferenciar señales de alerta de confirmaciones de fraude.
+
+4.5. Propuestas de control
+
+En función de los hallazgos, proponer qué controles podrían evaluarse.
+
+Por ejemplo:
+
+- Revisión de reglas existentes.
+- Nuevas condiciones por entidad receptora.
+- Segmentación de reglas por perfil de cliente.
+- Controles de frecuencia transaccional.
+- Controles de montos acumulados.
+- Evaluación de ventanas temporales.
+- Monitoreo de cambios en las tipologías.
+
+Las propuestas deben ser recomendaciones para evaluación, no asumir que una correlación demuestra causalidad ni que una regla necesariamente reducirá las pérdidas.
+
+Considerar el impacto potencial sobre falsos positivos, transacciones legítimas y clientes afectados.
+
+5. REQUERIMIENTOS TÉCNICOS Y ENTREGABLES
+
+Necesito que desarrolles el análisis mediante código utilizando las herramientas y estructuras de datos disponibles en el entorno.
+
+La IA ya conoce las fuentes, variables y nombres de columnas. Por tanto, identifica las variables necesarias utilizando el contexto disponible. No inventes nombres de columnas ni supongas que existen campos que no hayan sido identificados.
+
+Antes de ejecutar:
+
+1. Validar la disponibilidad de los períodos.
+2. Verificar los campos de fechas y montos.
+3. Confirmar la granularidad de los registros.
+4. Identificar la definición de fraude utilizada.
+5. Validar la identificación de clientes únicos.
+6. Revisar duplicados y posibles diferencias entre registros de transacciones y casos de investigación.
+7. Identificar cómo se tratan los recuperos y otros ajustes monetarios.
+8. Verificar que los totales coincidan con los indicadores de referencia.
+
+Mantener separadas las perspectivas de fecha de transacción y fecha de cierre.
+
+No duplicar montos ni clientes al realizar agrupaciones o cruces. Validar la granularidad y las llaves de cada fuente antes de calcular los indicadores.
+
+Entregable 1. Código
+
+Generar código modular, ordenado y reutilizable, dividido por etapas.
+
+Cada bloque debe realizar una función específica y producir resultados verificables.
+
+Entregable 2. Archivo Excel
+
+Exportar un libro de Excel con hojas independientes:
+
+1. "01_Evolucion_General"
+2. "02_Analisis_Canales"
+3. "03_Entidades_Receptoras"
+4. "04_Analisis_Entidades"
+5. "05_Pareto"
+6. "06_Perfil_Clientes"
+7. "07_Seguimiento_Noviembre"
+8. "08_Resumen_Ejecutivo"
+
+Incluir tablas comparativas, variaciones absolutas, variaciones porcentuales, participaciones y contribuciones.
+
+Los resultados deben ser consistentes entre hojas.
+
+Entregable 3. Resumen de hallazgos
+
+Generar un resumen ejecutivo que responda:
+
+1. ¿Qué ocurrió con el fraude en octubre?
+2. ¿Cuánto aumentó?
+3. ¿Cuáles fueron los principales impulsores?
+4. ¿Qué canal explica el incremento?
+5. ¿Qué entidades contribuyeron más?
+6. ¿Qué cambió dentro de esas entidades?
+7. ¿Qué segmentos, tipologías y rangos de monto concentran el problema?
+8. ¿Cuáles son los principales factores del Pareto?
+9. ¿Qué deberíamos monitorear durante noviembre?
+10. ¿Qué acciones deberían evaluarse?
+
+Entregable 4. Insights para presentación gerencial
+
+Redactar los hallazgos en lenguaje ejecutivo.
+
+Cada insight debe incluir:
+
+- Hallazgo.
+- Evidencia cuantitativa.
+- Comparación histórica.
+- Interpretación.
+- Implicancia para la gestión del riesgo.
+- Acción recomendada.
+
+Evitar afirmaciones genéricas como "el fraude aumentó en transferencias inmediatas".
+
+Preferir conclusiones específicas como:
+
+"El incremento del fraude durante octubre se concentró principalmente en transferencias inmediatas, impulsado por un aumento de clientes afectados en determinadas entidades receptoras. Adicionalmente, se identificó un cambio en la composición por segmentos, acompañado de una mayor frecuencia transaccional. Estos factores explican la mayor parte de la variación y constituyen las principales prioridades para el seguimiento de noviembre".
+
+Este ejemplo es únicamente ilustrativo. Las conclusiones finales deben estar respaldadas por los resultados reales.
+
+6. CONSIDERACIONES IMPORTANTES
+
+- No inventar resultados ni completar información faltante mediante supuestos.
+- Diferenciar correlación, asociación y causalidad.
+- No utilizar únicamente porcentajes: mostrar también los montos absolutos.
+- Evitar que los rankings oculten variaciones relevantes fuera del Top 10.
+- Identificar explícitamente los cambios estructurales en la composición del fraude.
+- No asumir que un aumento del monto implica necesariamente más clientes afectados.
+- No asumir que una nueva entidad es un nuevo foco sin revisar su historial.
+- Considerar los efectos de maduración de los casos en la fecha de cierre.
+- No mezclar montos brutos, netos y recuperos.
+- Documentar cualquier limitación de los datos.
+
+7. FORMA DE TRABAJO
+
+Desarrollar el análisis por etapas y no ejecutar todas las profundizaciones indiscriminadamente.
+
+Primero realizar la evolución general. Luego identificar el canal principal. Después profundizar en las entidades prioritarias y finalmente analizar sus características.
+
+Si un resultado identifica un nuevo hallazgo relevante que no estaba contemplado en las hipótesis iniciales, señalarlo y proponer una profundización adicional.
+
+Priorizar los hallazgos según su impacto monetario y su relevancia para la gestión del riesgo.
+
+El resultado final debe permitir responder una pregunta central: ¿qué cambió durante octubre, qué factores explican el incremento del fraude, dónde se concentra el problema y qué debemos hacer para evitar que el comportamiento se repita durante noviembre?
