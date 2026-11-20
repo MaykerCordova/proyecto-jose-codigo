@@ -1,0 +1,913 @@
+# PROYECTO: FRAUD FORECASTING ANALYTICS
+## Modelo probabilístico de pronóstico del fraude financiero mediante simulación Monte Carlo, análisis de maduración y validación histórica.
+
+---
+
+# 1. ROL Y RESPONSABILIDAD
+
+Actúa como un equipo multidisciplinario de especialistas conformado por:
+
+1. Científico de datos especializado en Machine Learning, forecasting y modelos predictivos.
+2. Estadístico especializado en simulación Monte Carlo, procesos estocásticos, distribuciones de probabilidad y análisis de supervivencia.
+3. Especialista en prevención de fraude financiero, medios de pago y riesgo operacional.
+4. Ingeniero de datos especializado en procesamiento, transformación y arquitectura de información.
+5. Desarrollador Python especializado en aplicaciones analíticas interactivas.
+
+Tu responsabilidad es diseñar, desarrollar, validar y documentar una solución integral de forecasting probabilístico del fraude financiero.
+
+No quiero únicamente explicaciones teóricas ni fragmentos de código aislados. Quiero desarrollar un proyecto funcional, reproducible, modular, estadísticamente fundamentado y con una interfaz visual interactiva.
+
+Debes explicar los fundamentos matemáticos, justificar las decisiones metodológicas y evaluar empíricamente el desempeño de los modelos.
+
+Trabaja con mentalidad de un proyecto real de analítica avanzada dentro de una institución financiera.
+
+# 2. CONTEXTO DEL NEGOCIO
+
+En prevención de fraude financiero, los indicadores oficiales se reportan considerando la FECHA DE CIERRE o fecha de calificación del fraude.
+
+La fecha de cierre no necesariamente coincide con la fecha de transacción.
+
+Existe un desfase entre ambas fechas debido a los procesos de identificación, investigación, confirmación y calificación del fraude.
+
+Por ejemplo, el monto total de fraude cerrado durante octubre puede tener la siguiente composición hipotética:
+
+- 70% corresponde a transacciones realizadas durante octubre.
+- 25% corresponde a transacciones realizadas durante septiembre.
+- 5% corresponde a transacciones de meses anteriores.
+
+Esto significa que el fraude reportado durante octubre puede tener su origen en operaciones realizadas en distintos meses.
+
+El fraude tiene un proceso de maduración: una transacción realizada en un mes puede ser identificada y confirmada como fraude durante ese mismo mes o durante los siguientes.
+
+Por lo tanto, no es correcto asumir que todo el fraude cerrado en octubre se origina en transacciones de octubre.
+
+La variable temporal principal del reporte será la FECHA DE CIERRE, mientras que la FECHA DE TRANSACCIÓN será fundamental para explicar el origen, la maduración y el comportamiento temporal del fraude.
+
+# 3. OBJETIVO GENERAL
+
+Construir un modelo de forecasting probabilístico mediante simulación Monte Carlo que permita estimar, antes de finalizar un mes, cuánto fraude y cuántos clientes afectados se registrarán al cierre de dicho periodo.
+
+El modelo deberá utilizar la información disponible hasta una fecha de corte determinada y generar miles de escenarios posibles de cierre.
+
+No se busca obtener únicamente un valor puntual, sino una distribución probabilística que permita cuantificar la incertidumbre del pronóstico.
+
+Asimismo, se deberá evaluar la capacidad predictiva del modelo mediante backtesting histórico, simulando cómo habría pronosticado cierres de meses anteriores.
+
+# 4. OBJETIVOS ESPECÍFICOS
+
+- Analizar el comportamiento histórico del fraude según fecha de cierre.
+- Identificar el origen temporal del fraude según fecha de transacción.
+- Estudiar los patrones de maduración y rezago.
+- Estimar el comportamiento estadístico del monto defraudado.
+- Estimar el comportamiento de los clientes afectados.
+- Construir modelos de forecasting.
+- Implementar simulaciones Monte Carlo.
+- Obtener distribuciones de posibles cierres mensuales.
+- Calcular escenarios conservadores, centrales y de alta exposición.
+- Evaluar el desempeño mediante backtesting.
+- Comparar diferentes metodologías predictivas.
+- Desarrollar una aplicación web interactiva para presentar resultados.
+- Documentar los supuestos, limitaciones y conclusiones.
+
+# 5. DEFINICIÓN DE VARIABLES Y OBJETIVOS DE PREDICCIÓN
+
+Identifica y documenta las variables disponibles en la fuente de información.
+
+Variables principales:
+
+| Variable | Descripción |
+|---|---|
+| Fecha de transacción | Fecha en que ocurrió la operación |
+| Fecha de cierre | Fecha en que se confirmó o registró el fraude |
+| Fecha de disponibilidad | Fecha en que el registro o información estuvo disponible para el análisis, si existe |
+| Monto defraudado | Importe económico asociado al fraude |
+| Identificador de cliente | Identificador para contar clientes únicos |
+| Identificador de transacción | Identificador de operación |
+| Canal | Canal de origen |
+| Segmento | Segmentación del cliente |
+| Tipo de fraude | Clasificación del fraude |
+| Estado de fraude | Estado o calificación del caso |
+
+No inventes nombres de columnas ni supongas que todas las variables existen.
+
+Identifica equivalencias en el esquema real.
+
+Define dos objetivos principales:
+
+**Objetivo A: monto defraudado por fecha de cierre.**
+
+Variable objetivo: suma del monto de fraude confirmado cuya fecha de cierre pertenece al mes pronosticado.
+
+**Objetivo B: clientes afectados por fecha de cierre.**
+
+Variable objetivo: cantidad de clientes únicos asociados a los fraudes cerrados durante el mes pronosticado.
+
+Es importante diferenciar:
+
+- Cantidad de transacciones fraudulentas.
+- Cantidad de registros de fraude.
+- Cantidad de clientes únicos afectados.
+
+Un mismo cliente puede tener varias transacciones fraudulentas. No se deben sumar registros como si fueran clientes diferentes.
+
+Si un cliente tiene cierres en distintos meses, debe definirse claramente si se contará como afectado en cada mes de cierre o solamente una vez en el periodo analizado. Para el reporte mensual, utilizar clientes únicos por mes.
+
+# 6. INSPECCIÓN Y PREPARACIÓN DE LOS DATOS
+
+Antes de construir los modelos, inspecciona completamente los datos.
+
+Realiza:
+
+- Identificación de columnas.
+- Tipos de datos.
+- Granularidad.
+- Periodo histórico disponible.
+- Valores nulos.
+- Duplicados.
+- Consistencia de fechas.
+- Montos negativos y atípicos.
+- Identificadores repetidos.
+- Registros sin fecha de cierre.
+- Diferencias entre fecha de transacción y fecha de cierre.
+- Estados y calificaciones de fraude.
+
+Determina cuál es el universo correcto de análisis y qué registros constituyen fraude confirmado.
+
+Distingue los siguientes conjuntos cuando estén disponibles:
+
+1. Transacciones potencialmente fraudulentas.
+2. Casos pendientes de investigación.
+3. Casos confirmados como fraude.
+4. Casos descartados o clasificados como normales.
+5. Casos cerrados.
+
+No mezcles registros pendientes con fraude confirmado sin una justificación metodológica.
+
+Construye un dataset analítico consistente para el modelamiento.
+
+# 7. ANÁLISIS EXPLORATORIO Y ESTADÍSTICO
+
+Realiza un análisis exploratorio profundo.
+
+## 7.1. Comportamiento por fecha de cierre
+
+Analiza:
+
+- Evolución mensual del monto defraudado.
+- Evolución mensual de clientes afectados.
+- Cantidad de fraudes cerrados.
+- Comportamiento diario.
+- Distribución de montos.
+- Ticket promedio.
+- Variación mensual.
+- Concentración del fraude.
+
+## 7.2. Distribuciones estadísticas
+
+Calcula:
+
+- Media.
+- Mediana.
+- Desviación estándar.
+- Varianza.
+- Coeficiente de variación.
+- Percentiles 10, 25, 50, 75, 90 y 95.
+- Asimetría.
+- Curtosis.
+
+Evalúa:
+
+- Asimetría positiva.
+- Sobredispersión.
+- Valores extremos.
+- Concentración de montos.
+- Dependencia temporal.
+- Estacionalidad diaria y semanal.
+
+## 7.3. Distribuciones candidatas
+
+Evalúa, según corresponda:
+
+- Distribución empírica.
+- Bootstrap.
+- Gamma.
+- Lognormal.
+- Poisson.
+- Binomial Negativa.
+- Distribuciones de cola pesada cuando los datos lo justifiquen.
+
+No utilices automáticamente una distribución normal.
+
+Justifica la elección mediante diagnósticos, pruebas de ajuste y comparación con los datos observados.
+
+# 8. ANÁLISIS DE MADURACIÓN DEL FRAUDE
+
+Este es uno de los componentes más importantes del proyecto.
+
+El modelo debe contemplar que los fraudes cerrados en un mes pueden originarse en transacciones realizadas durante meses anteriores.
+
+## 8.1. Matriz de maduración
+
+Construye una matriz donde:
+
+- Filas: mes de fecha de transacción.
+- Columnas: mes de fecha de cierre.
+- Valores: monto defraudado y cantidad de clientes únicos.
+
+Ejemplo hipotético:
+
+| Mes de transacción | Septiembre | Octubre | Noviembre |
+|---|---:|---:|---:|
+| Septiembre | 75% | 20% | 5% |
+| Octubre | - | 70% | 30% |
+| Noviembre | - | - | Pendiente |
+
+Los porcentajes son exclusivamente ilustrativos.
+
+Calcula las participaciones reales y evalúa su estabilidad histórica.
+
+## 8.2. Distribución de antigüedad
+
+Clasifica las transacciones según el tiempo transcurrido hasta su cierre:
+
+- Mismo mes.
+- Un mes de antigüedad.
+- Dos meses.
+- Tres meses.
+- Cuatro meses.
+- Cinco o más meses.
+
+Calcula la distribución para monto y clientes.
+
+## 8.3. Curvas de maduración
+
+Estima la proporción acumulada de casos que se cierran después de distintos periodos.
+
+Analiza:
+
+- Tiempo hasta el cierre.
+- Probabilidad de cierre por periodo.
+- Rezagos medios y medianos.
+- Variabilidad del rezago.
+- Diferencias por canal y tipo de fraude.
+
+Evalúa análisis de supervivencia y modelos de riesgo instantáneo (hazard models) cuando corresponda.
+
+IMPORTANTE:
+
+Las cohortes recientes están censuradas: todavía pueden recibir nuevos cierres.
+
+No interpretes sus porcentajes observados como maduración definitiva.
+
+Evalúa técnicas adecuadas para tratar esta censura.
+
+## 8.4. Aplicación al pronóstico
+
+El modelo deberá estimar qué parte del cierre futuro podría provenir de:
+
+1. Transacciones realizadas durante el mes actual que todavía no se han cerrado.
+2. Transacciones realizadas durante meses anteriores que todavía podrían generar cierres.
+3. Casos pendientes de calificación, cuando la información esté disponible.
+
+Si no se dispone de un universo de transacciones pendientes o candidatos a fraude, identifica esta limitación y desarrolla una metodología alternativa utilizando únicamente la información observable.
+
+No inventes casos pendientes ni supongas que las transacciones normales se convertirán en fraude.
+
+# 9. MODELO DE FORECASTING
+
+Desarrolla y compara diferentes metodologías.
+
+## 9.1. Modelo baseline
+
+Construye una referencia sencilla utilizando promedios históricos y comportamiento diario.
+
+Evalúa la proyección por ritmo de acumulación.
+
+Este modelo servirá como punto de comparación.
+
+## 9.2. Modelo de patrones temporales
+
+Evalúa:
+
+- Promedio diario histórico.
+- Estacionalidad semanal.
+- Patrones de cierre mensual.
+- Variación por día del mes.
+- Comportamiento de meses anteriores.
+
+## 9.3. Modelo de maduración
+
+Modela la probabilidad de que los casos o transacciones de diferentes cohortes generen cierres futuros.
+
+Distingue el origen temporal del fraude y su fecha de cierre.
+
+## 9.4. Modelo combinado
+
+Construye un modelo que integre:
+
+- Comportamiento histórico del monto.
+- Frecuencia de cierres.
+- Maduración.
+- Distribución de rezagos.
+- Variabilidad diaria.
+- Dependencia entre monto y clientes.
+- Estacionalidad.
+
+Compara su rendimiento con los modelos anteriores.
+
+# 10. SIMULACIÓN MONTE CARLO
+
+Desarrolla un motor Monte Carlo que genere múltiples escenarios posibles de cierre mensual.
+
+## 10.1. Estructura conceptual
+
+Monto de cierre mensual:
+
+Monto acumulado observado hasta la fecha de corte
++
+Monto pendiente de cierre simulado durante los días restantes.
+
+El componente pendiente debe incorporar tanto los nuevos cierres como los rezagos provenientes de transacciones históricas.
+
+Evita duplicar montos ya observados.
+
+La simulación debe respetar la estructura temporal de las cohortes y el proceso de maduración.
+
+## 10.2. Metodologías de simulación
+
+Implementa y compara:
+
+A. Simulación basada en distribuciones empíricas.
+
+B. Bootstrap de comportamiento histórico.
+
+C. Simulación basada en cohortes y maduración.
+
+D. Modelo combinado.
+
+Evalúa qué metodología representa mejor los datos y ofrece menor error predictivo.
+
+## 10.3. Dependencia entre variables
+
+No asumas que monto y cantidad de clientes son independientes.
+
+Evalúa:
+
+- Correlación.
+- Dependencia entre montos y frecuencias.
+- Distribuciones conjuntas.
+- Bootstrap por bloques o remuestreo conjunto cuando corresponda.
+
+Considera que el fraude puede presentar concentraciones extraordinarias de montos.
+
+## 10.4. Ejecución
+
+Implementa inicialmente 10,000 iteraciones, permitiendo modificar el número de simulaciones.
+
+Utiliza semillas aleatorias reproducibles.
+
+Cada iteración debe generar un escenario completo de cierre mensual.
+
+Almacena los resultados individuales para construir distribuciones y visualizaciones.
+
+Evalúa la estabilidad de los resultados aumentando las iteraciones.
+
+# 11. DISTRIBUCIÓN PROBABILÍSTICA Y ESCENARIOS
+
+No presentes únicamente una estimación puntual.
+
+A partir de los escenarios simulados, calcula:
+
+- P10.
+- P25.
+- P50.
+- P75.
+- P90.
+- Media.
+- Mediana.
+- Desviación estándar.
+- Intervalos de predicción.
+
+Interpreta los escenarios:
+
+- P10: escenario conservador de menor exposición.
+- P50: pronóstico central o mediana.
+- P90: escenario de alta exposición.
+
+Recuerda que estos percentiles son cuantiles de la distribución simulada, no límites absolutos.
+
+Repite el análisis para:
+
+1. Monto defraudado.
+2. Clientes únicos afectados.
+
+Calcula también:
+
+- Ticket promedio esperado.
+- Probabilidad de superar umbrales de monto.
+- Probabilidad de superar el cierre del mes anterior.
+- Distribución del monto pendiente de cierre.
+- Incertidumbre del pronóstico.
+
+No calcules el ticket esperado dividiendo automáticamente dos medianas independientes. Estima el indicador a partir de cada simulación conjunta cuando sea posible.
+
+# 12. BACKTESTING Y VALIDACIÓN HISTÓRICA
+
+Este componente es obligatorio.
+
+El propósito es demostrar si el modelo habría podido pronosticar correctamente meses anteriores.
+
+## 12.1. Reconstrucción histórica
+
+Ejemplo:
+
+Queremos pronosticar octubre utilizando exclusivamente la información disponible al inicio de octubre.
+
+Debemos:
+
+1. Reconstruir la información disponible al 30 de septiembre.
+2. Construir el modelo con los datos permitidos.
+3. Simular los posibles cierres de octubre.
+4. Obtener P10, P50 y P90.
+5. Comparar con el cierre real de octubre.
+6. Calcular los errores.
+
+Repetir para diferentes meses históricos.
+
+## 12.2. Diferentes fechas de corte
+
+Evaluar:
+
+- Día 1.
+- Día 7.
+- Día 15.
+- Día 20.
+- Día 25.
+
+Esto permitirá determinar cómo mejora el pronóstico conforme avanza el mes.
+
+## 12.3. Métricas de evaluación
+
+Calcular:
+
+- MAE.
+- RMSE.
+- MAPE, cuando sea válido.
+- WAPE.
+- Error porcentual del pronóstico central.
+- Cobertura del intervalo P10-P90.
+- Ancho promedio de intervalos.
+- Pinball Loss para los cuantiles.
+
+## 12.4. Comparación de modelos
+
+Comparar:
+
+1. Promedio histórico.
+2. Proyección por ritmo diario.
+3. Modelo temporal.
+4. Modelo de maduración.
+5. Monte Carlo empírico.
+6. Modelo combinado.
+
+Identificar cuál presenta el mejor desempeño.
+
+## 12.5. Prevención de Data Leakage
+
+Es indispensable que cada backtest utilice exclusivamente información que habría estado disponible en la fecha de corte.
+
+Distingue:
+
+- Fecha de transacción.
+- Fecha de cierre.
+- Fecha en que el registro estuvo disponible.
+- Fecha de actualización de la información.
+
+Si existen snapshots históricos, utilízalos.
+
+Si no existen snapshots, evalúa si es posible reconstruir el estado histórico de los registros.
+
+Si la información actual contiene actualizaciones o calificaciones posteriores a la fecha de corte, no la utilices como si hubiera estado disponible históricamente.
+
+Documenta esta limitación y no declares válido un backtesting que no respete la disponibilidad temporal real de los datos.
+
+# 13. DASHBOARD INTERACTIVO: FRAUD FORECASTING ANALYTICS
+
+No utilizar Power BI como herramienta principal de presentación.
+
+Desarrollar una aplicación web analítica utilizando:
+
+- Python.
+- Streamlit.
+- Plotly.
+- Polars o Pandas.
+- NumPy.
+- SciPy.
+
+La aplicación debe ejecutarse localmente desde el navegador y conectarse directamente con el motor estadístico de Python.
+
+Diseña una interfaz moderna, profesional, limpia y enfocada en analítica financiera.
+
+Toma como referencia visual las aplicaciones de simulación Monte Carlo que muestran trayectorias aleatorias, distribuciones de probabilidad y convergencia de resultados.
+
+No quiero un dashboard convencional lleno de gráficos estáticos.
+
+Quiero una aplicación interactiva donde el usuario pueda configurar el pronóstico, ejecutar simulaciones, explorar resultados y evaluar su precisión.
+
+## MÓDULO 1: PANEL EJECUTIVO
+
+Mostrar tarjetas KPI:
+
+- Monto acumulado al corte.
+- Pronóstico central de cierre P50.
+- Escenario P10.
+- Escenario P90.
+- Clientes afectados acumulados.
+- Clientes proyectados al cierre.
+- Variación frente al mes anterior.
+- Fecha de corte.
+
+Incluir comparaciones históricas y principales conclusiones.
+
+## MÓDULO 2: SIMULACIÓN MONTE CARLO
+
+### A. Fan Chart
+
+Mostrar el comportamiento real acumulado y las proyecciones simuladas para los días restantes.
+
+Incluir:
+
+- Línea real.
+- Trayectoria central P50.
+- Banda P10-P90.
+- Evolución de los escenarios.
+- Trayectorias individuales opcionales.
+
+### B. Distribución probabilística
+
+Construir un histograma de los resultados simulados.
+
+Incluir marcadores verticales:
+
+- P10.
+- P50.
+- P90.
+- Media.
+- Mediana.
+
+Mostrar la distribución del monto y de clientes.
+
+### C. Convergencia
+
+Representar la evolución de:
+
+- Media.
+- P10.
+- P50.
+- P90.
+
+A medida que aumenta el número de iteraciones.
+
+Permitir identificar la estabilidad de los estimadores.
+
+### D. Comparación de escenarios
+
+Comparar escenarios conservador, central y de alta exposición.
+
+### E. Probabilidad de excedencia
+
+Mostrar la probabilidad de superar determinados umbrales de monto defraudado.
+
+## MÓDULO 3: MADURACIÓN DEL FRAUDE
+
+Incluir:
+
+- Heatmap de mes de transacción frente a mes de cierre.
+- Distribución de rezagos.
+- Curvas de maduración.
+- Participación de cada mes de origen.
+- Comparación de maduración de monto y clientes.
+- Evolución histórica de cohortes.
+
+Permitir seleccionar un mes de cierre y observar de qué meses proviene su fraude.
+
+## MÓDULO 4: BACKTESTING
+
+Incluir:
+
+- Pronóstico frente a resultado real.
+- Evolución de errores históricos.
+- Cobertura de intervalos.
+- Comparación de modelos.
+- Precisión según fecha de corte.
+- Desempeño por monto y clientes.
+
+Mostrar claramente qué tan confiable ha sido el modelo.
+
+## MÓDULO 5: PERFILAMIENTO DEL FRAUDE
+
+Cuando existan las variables necesarias, incorporar:
+
+- Canal.
+- Segmento.
+- Tipo de fraude.
+- Evolución del monto.
+- Clientes afectados.
+- Ticket promedio.
+- Participación por categoría.
+
+Permitir identificar qué componentes explican el comportamiento del pronóstico.
+
+## 13.1. CONTROLES INTERACTIVOS
+
+Incluir:
+
+- Mes de pronóstico.
+- Fecha de corte.
+- Número de iteraciones.
+- Variable objetivo.
+- Canal.
+- Segmento.
+- Tipo de fraude.
+- Selección de modelo.
+- Semilla aleatoria.
+
+Incorporar un botón para ejecutar la simulación.
+
+Los gráficos deben actualizarse en función de los filtros seleccionados.
+
+## 13.2. EXPORTACIÓN
+
+Permitir generar:
+
+- Excel con resultados.
+- CSV con las simulaciones.
+- HTML interactivo con gráficos.
+- PDF ejecutivo.
+- Imágenes PNG de gráficos.
+
+El HTML debe permitir consultar los resultados gráficos sin necesidad de abrir Power BI.
+
+## 13.3. DISEÑO Y EXPERIENCIA DE USUARIO
+
+Utilizar:
+
+- Navegación por módulos.
+- Tarjetas KPI.
+- Gráficos Plotly interactivos.
+- Tooltips informativos.
+- Filtros laterales.
+- Tablas ordenables.
+- Indicadores visuales.
+- Diseño adaptable.
+
+Priorizar claridad y jerarquía visual.
+
+No saturar las pantallas con elementos innecesarios.
+
+# 14. ARQUITECTURA TECNOLÓGICA
+
+Utilizar Python como lenguaje principal.
+
+Tecnologías recomendadas:
+
+- Polars para procesamiento de datos.
+- Pandas cuando sea necesario.
+- NumPy para generación aleatoria.
+- SciPy para distribuciones estadísticas.
+- Scikit-learn para modelos complementarios.
+- Lifelines u otra biblioteca adecuada para análisis de supervivencia.
+- Plotly para visualizaciones.
+- Streamlit para la aplicación.
+- SQLite o DuckDB cuando el volumen lo requiera.
+
+Separar el motor estadístico de la interfaz.
+
+Propuesta de estructura:
+
+fraud_forecasting/
+│
+├── data/
+│   ├── raw/
+│   ├── processed/
+│   └── outputs/
+│
+├── src/
+│   ├── data_loader.py
+│   ├── data_cleaning.py
+│   ├── exploratory_analysis.py
+│   ├── fraud_maturity.py
+│   ├── statistical_analysis.py
+│   ├── forecasting.py
+│   ├── monte_carlo.py
+│   ├── backtesting.py
+│   ├── metrics.py
+│   └── visualizations.py
+│
+├── app/
+│   ├── app.py
+│   └── pages/
+│       ├── executive_dashboard.py
+│       ├── monte_carlo.py
+│       ├── fraud_maturity.py
+│       ├── backtesting.py
+│       └── fraud_profile.py
+│
+├── reports/
+├── tests/
+├── requirements.txt
+└── README.md
+
+Ajusta esta estructura si identificas una arquitectura más eficiente.
+
+## 14.1. REQUISITOS DE CALIDAD
+
+- Código modular.
+- Funciones reutilizables.
+- Manejo de excepciones.
+- Logs.
+- Validaciones de datos.
+- Reproducibilidad.
+- Semillas configurables.
+- Documentación matemática.
+- Optimización de rendimiento.
+- Separación entre datos, modelos y visualización.
+- Pruebas unitarias.
+- Control de versiones.
+
+No sacrifiques rigurosidad estadística por velocidad de desarrollo o atractivo visual.
+
+# 15. SEGURIDAD Y ENTORNO CORPORATIVO
+
+El proyecto se desarrollará en un entorno financiero corporativo.
+
+Por tanto:
+
+- No transmitir información sensible a servicios externos.
+- No cargar datos bancarios en plataformas públicas.
+- No utilizar APIs externas sin autorización.
+- Respetar las políticas corporativas de almacenamiento.
+- Mantener los datos dentro del entorno aprobado.
+- No incluir identificadores personales en los reportes exportados.
+- Utilizar datos anonimizados cuando sea posible.
+
+Verifica que las dependencias y el mecanismo de ejecución sean compatibles con el entorno corporativo.
+
+# 16. METODOLOGÍA DE DESARROLLO POR ETAPAS
+
+Desarrolla el proyecto de manera incremental.
+
+### ETAPA 1: INSPECCIÓN DE DATOS
+
+- Inspeccionar archivos.
+- Identificar columnas.
+- Determinar granularidad.
+- Revisar calidad.
+- Identificar periodos históricos.
+- Definir las variables objetivo.
+
+ENTREGABLE: diagnóstico de datos y propuesta de arquitectura.
+
+### ETAPA 2: ANÁLISIS EXPLORATORIO
+
+- Estadística descriptiva.
+- Distribuciones.
+- Estacionalidad.
+- Valores extremos.
+- Comportamiento histórico.
+
+ENTREGABLE: análisis exploratorio y conclusiones.
+
+### ETAPA 3: MADURACIÓN DEL FRAUDE
+
+- Matriz de cohortes.
+- Curvas de maduración.
+- Análisis de rezagos.
+- Censura.
+- Distribuciones por antigüedad.
+
+ENTREGABLE: modelo de maduración.
+
+### ETAPA 4: MODELOS DE FORECASTING
+
+- Baseline.
+- Modelo temporal.
+- Modelo de maduración.
+- Modelo combinado.
+
+ENTREGABLE: comparación de metodologías.
+
+### ETAPA 5: MONTE CARLO
+
+- Definición de distribuciones.
+- Construcción del motor.
+- Generación de escenarios.
+- Cálculo de cuantiles.
+- Análisis de convergencia.
+
+ENTREGABLE: motor Monte Carlo funcional.
+
+### ETAPA 6: BACKTESTING
+
+- Reconstrucción histórica.
+- Walk-Forward Validation.
+- Evaluación de errores.
+- Comparación de modelos.
+- Cobertura probabilística.
+
+ENTREGABLE: informe de validación.
+
+### ETAPA 7: DASHBOARD
+
+- Aplicación Streamlit.
+- Gráficos Plotly.
+- Filtros.
+- Ejecución de simulaciones.
+- Exportación.
+
+ENTREGABLE: aplicación web funcional.
+
+### ETAPA 8: DOCUMENTACIÓN
+
+- Documentación técnica.
+- Explicación matemática.
+- Interpretación ejecutiva.
+- Limitaciones.
+- Recomendaciones.
+
+ENTREGABLE: proyecto completo y reproducible.
+
+# 17. REGLAS DE TRABAJO CON LA IA
+
+Sigue estrictamente estas instrucciones:
+
+1. No inventes datos, columnas ni resultados.
+2. No construyas modelos sin comprender previamente la estructura de los datos.
+3. No supongas que las distribuciones son normales.
+4. No utilices porcentajes hipotéticos de maduración como parámetros definitivos.
+5. No confundas fecha de transacción con fecha de cierre.
+6. No sumes clientes repetidos.
+7. No utilices información futura en el backtesting.
+8. No confundas una simulación Monte Carlo con una predicción automáticamente confiable.
+9. Justifica las decisiones estadísticas.
+10. Compara los modelos con métricas objetivas.
+11. Explica las fórmulas antes de implementarlas.
+12. Genera código ejecutable y modular.
+13. Si falta información, identifica qué se necesita y por qué.
+14. Si existen limitaciones de datos, propone alternativas y explica sus consecuencias.
+15. Utiliza datos sintéticos solamente para pruebas de funcionamiento, identificándolos claramente.
+16. No avances a una etapa crítica sin validar las decisiones metodológicas pendientes.
+
+# 18. ENTREGABLE FINAL
+
+Al finalizar quiero contar con:
+
+1. Dataset analítico preparado.
+2. Análisis exploratorio.
+3. Modelo de maduración del fraude.
+4. Modelos de forecasting.
+5. Motor Monte Carlo.
+6. Distribuciones probabilísticas de cierre.
+7. Pronósticos de monto defraudado.
+8. Pronósticos de clientes afectados.
+9. Escenarios P10, P50 y P90.
+10. Backtesting histórico.
+11. Comparación de modelos.
+12. Dashboard web interactivo.
+13. Exportación de resultados.
+14. Documentación técnica.
+15. Informe ejecutivo con conclusiones.
+
+El producto final debe permitir seleccionar un mes, establecer una fecha de corte y ejecutar una simulación para estimar cómo podría terminar el mes.
+
+Debe mostrar no solamente cuánto fraude podríamos cerrar, sino también:
+
+- Cuál es el escenario más probable.
+- Qué nivel de incertidumbre existe.
+- Qué parte del fraude proviene de meses anteriores.
+- Cómo está evolucionando la maduración.
+- Qué factores explican el pronóstico.
+- Qué precisión ha demostrado el modelo históricamente.
+
+# 19. INSTRUCCIÓN INICIAL: COMENZAR EL PROYECTO
+
+Comienza por la ETAPA 1.
+
+Primero inspecciona los archivos disponibles y presenta:
+
+1. Inventario de archivos y estructura de datos.
+2. Diccionario de variables.
+3. Granularidad de los registros.
+4. Periodo histórico disponible.
+5. Calidad de datos.
+6. Disponibilidad de fecha de transacción, fecha de cierre y fecha de disponibilidad.
+7. Identificación de posibles problemas de maduración.
+8. Viabilidad de reconstrucción histórica para backtesting.
+
+Posteriormente presenta una propuesta de arquitectura de datos y metodología estadística adaptada a la información real.
+
+No comiences directamente con la simulación Monte Carlo.
+
+Primero debemos comprender cómo se genera, madura y registra el fraude.
+
+**OBJETIVO FINAL: CONSTRUIR UNA PLATAFORMA DE FRAUD FORECASTING ANALYTICS QUE PERMITA ANTICIPAR PROBABILÍSTICAMENTE EL CIERRE MENSUAL DEL FRAUDE FINANCIERO Y MEDIR OBJETIVAMENTE LA CONFIABILIDAD DE SUS PRONÓSTICOS.**
