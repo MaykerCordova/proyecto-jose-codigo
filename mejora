@@ -1,3 +1,89 @@
+RESP2:
+Quiero complementar el diagnóstico de la Etapa 1 incorporando una segunda fuente: el PLANO.
+
+Hay una particularidad importante en nuestro proceso operativo:
+
+El MasterFile contiene exclusivamente las llaves que terminaron calificadas como fraude confirmado. Sin embargo, el PLANO contiene un universo más amplio y permite observar el historial de calificaciones de una misma llave.
+
+Una llave puede haber pasado por diferentes estados durante su ciclo de vida, por ejemplo: pendiente, investigación, pendiente nuevamente y finalmente fraude o descarte.
+
+Por eso, quiero que evalúes la posibilidad de incorporar el PLANO como fuente complementaria, sin reemplazar el MasterFile.
+
+Necesito que realices lo siguiente:
+
+**1. Diagnóstico del PLANO**
+- Identifica su estructura y granularidad.
+- Identifica cómo se representan las distintas calificaciones de una misma llave.
+- Determina si cada calificación tiene una fecha asociada.
+- Identifica si el historial está almacenado horizontalmente en columnas o si existe una estructura de eventos.
+- Identifica todos los estados posibles y sus respectivas fechas.
+- Verifica si podemos identificar la secuencia de calificaciones de cada llave.
+
+**2. Reconstrucción del ciclo de vida**
+Evalúa si podemos reconstruir, para cada llave:
+- Primera fecha de ingreso al proceso.
+- Primera calificación.
+- Fechas de cada cambio de calificación.
+- Estados intermedios.
+- Fecha de calificación final.
+- Estado final.
+- Tiempo total transcurrido hasta su resolución.
+
+Si la información está almacenada horizontalmente, evalúa cómo transformarla en una estructura longitudinal, con una fila por llave y evento de calificación.
+
+**3. Integración con MasterFile**
+Evalúa la relación entre ambas fuentes mediante la llave única.
+
+Quiero identificar:
+- Llaves del PLANO que terminaron en fraude y aparecen en MasterFile.
+- Llaves que terminaron descartadas o como no fraude.
+- Llaves que continúan pendientes.
+- Posibles diferencias de monto, fecha de cierre y calificación.
+- Duplicados o inconsistencias de integración.
+
+No asumas que toda llave del PLANO debe aparecer en MasterFile.
+
+**4. Análisis de pendientes y transiciones**
+Evalúa si el PLANO permite calcular:
+- Stock de llaves pendientes por fecha.
+- Antigüedad de las llaves pendientes.
+- Tiempo mediano y percentiles de resolución.
+- Probabilidad de transición desde pendiente hacia fraude.
+- Probabilidad de transición hacia descarte o no fraude.
+- Distribución del tiempo hasta la calificación final.
+- Monto asociado a las llaves pendientes.
+
+**5. Relación con el forecasting**
+
+Quiero mantener dos componentes diferenciados:
+
+A. Forecast principal: monto de fraude confirmado y clientes únicos por fecha de cierre, utilizando MasterFile.
+
+B. Componente complementario: estimación del flujo futuro de llaves que podrían terminar calificadas como fraude, utilizando el historial del PLANO.
+
+Evalúa si el segundo componente puede mejorar el pronóstico principal, especialmente cuando existen llaves pendientes al momento del corte.
+
+No sumes automáticamente las llaves pendientes al forecast. Primero debemos estimar sus probabilidades de resolución y fraude, considerando su antigüedad y sus estados anteriores.
+
+También evita duplicar llaves que ya estén incluidas en el MasterFile.
+
+**6. Restricción temporal**
+
+Verifica si el PLANO permite reconstruir qué estado tenía cada llave en una fecha histórica determinada.
+
+Si solo tenemos la fotografía actual y no contamos con fechas de cada calificación o snapshots anteriores, documenta que no es posible reconstruir de manera confiable el stock histórico de pendientes.
+
+No inventes fechas ni estados históricos.
+
+**7. Entregable**
+
+Por ahora, no modifiques el modelo de forecasting ni implementes el componente de pendientes.
+
+Entrégame primero un diagnóstico técnico de la viabilidad de utilizar el PLANO para reconstruir el ciclo de vida de las llaves, identificar los pendientes y modelar las transiciones hacia fraude confirmado.
+
+Quiero saber exactamente qué información existe, qué información falta y qué análisis estadísticos podemos realizar con evidencia de los datos.
+
+##################### FIN RESP 2 
 respuesta:
 Quiero dejar cerradas las definiciones funcionales y metodológicas del proyecto Fraud Forecasting Analytics. Considera las siguientes decisiones como lineamientos para continuar con la Etapa 1.
 
