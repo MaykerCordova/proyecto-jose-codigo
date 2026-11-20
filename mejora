@@ -1,3 +1,184 @@
+respuesta:
+Quiero dejar cerradas las definiciones funcionales y metodológicas del proyecto Fraud Forecasting Analytics. Considera las siguientes decisiones como lineamientos para continuar con la Etapa 1.
+
+### 1. Universo y definiciones
+
+**1. Universo reportable**
+
+Para el pronóstico, quiero utilizar como referencia el universo reportable del proyecto de atribución:
+
+- `Reporte_kris = "SI"`.
+- No excluir registros por `Rkris_Excluir` en esta primera versión.
+- Utilizar el monto bruto defraudado, sin descontar recuperos.
+
+El objetivo es pronosticar el monto de fraude digital que se reporta oficialmente, no el impacto neto después de recuperaciones.
+
+Sin embargo, antes de implementar el filtro, valida cuántos registros y cuánto monto se incluyen o excluyen con cada criterio. Documenta las diferencias y confirma que esta definición coincide con el indicador que reporta Gerencia. No asumas que el universo de atribución y el indicador oficial son idénticos sin esa validación.
+
+**2. Definición de fraude confirmado**
+
+El universo de análisis debe contener exclusivamente casos con calificación final de fraude confirmado.
+
+No debemos considerar como fraude confirmado los casos pendientes de investigación, pendientes de calificación, descartados o calificados como no fraude.
+
+Si los archivos contienen estados o indicadores de calificación, identifícalos y documenta su distribución. No inventes una variable de pendientes si el MasterFile no contiene esos registros.
+
+**3. Fecha de cierre**
+
+Utilicemos inicialmente:
+
+- `POS1_ACF-FECHA CIERRE CASO`: fecha diaria de cierre.
+- `POS1_PeriodoCierre`: periodo mensual de cierre.
+
+La fecha diaria será la referencia principal para reconstruir la evolución diaria del fraude. El periodo mensual servirá para contrastar y validar el reporte mensual.
+
+Verifica si ambas variables son consistentes. Si existen diferencias, identifica los casos y no las corrijas automáticamente.
+
+El objetivo oficial será pronosticar el monto defraudado por mes de cierre y, complementariamente, los clientes únicos afectados por mes de cierre.
+
+**4. Identificadores**
+
+Identifica cuál es el identificador único del cliente y cuál es la llave única del fraude o transacción.
+
+La cantidad de fraudes/transacciones y la cantidad de clientes afectados son métricas distintas.
+
+Para clientes únicos, un mismo cliente debe contarse una sola vez dentro de cada mes de cierre. Si ese cliente registra fraudes en dos meses diferentes, contará en ambos meses.
+
+No asumas que el identificador de cliente utilizado en otros procesos es el mismo hasta verificarlo en los archivos.
+
+### 2. Disponibilidad temporal y backtesting
+
+**5. Fecha de disponibilidad**
+
+Por ahora no tenemos identificada una columna específica de fecha de disponibilidad.
+
+Utilizaremos `POS1_ACF-FECHA CIERRE CASO` como aproximación de la fecha en que el fraude quedó confirmado y disponible para el análisis, pero este es un supuesto metodológico que debe validarse.
+
+Es fundamental revisar si las recalificaciones pueden modificar retroactivamente la información histórica. Si un caso cambia de no fraude a fraude, o viceversa, y el parquet conserva únicamente su estado actual, no podremos reconstruir exactamente qué información se conocía en una fecha de corte pasada.
+
+Por eso, inspecciona si existe alguna fecha de carga, actualización o calificación por registro.
+
+**6. Snapshots históricos**
+
+Verifica si existen PLANOS, snapshots o versiones históricas de los parquets.
+
+Si existen, identifica sus fechas y evalúa si permiten reconstruir el estado de la información en cada corte histórico.
+
+Si no existen, documenta esta limitación. No afirmes que el backtesting histórico reproduce perfectamente la información disponible en el pasado.
+
+**7. Recalificaciones**
+
+Investiga si las recalificaciones modifican únicamente la marca de calificación o también la fecha de cierre y otros atributos.
+
+Verifica si existe una tabla de historial de calificaciones, como `HistorialCalificaciones`, con fecha y estado de cada cambio.
+
+Si no existe historial de estados ni snapshots, debemos considerar que el backtesting estará sujeto a posible fuga de información (*data leakage*). En ese escenario, presenta el backtesting como una evaluación aproximada y no como una validación estrictamente point-in-time.
+
+No reconstruyas estados históricos utilizando únicamente la calificación actual.
+
+### 3. Alcance del pronóstico
+
+**8. Nivel de pronóstico**
+
+La primera versión debe pronosticar el total del fraude digital reportable.
+
+Adicionalmente, quiero analizar la composición por:
+
+- Modalidad.
+- Segmento.
+- Canal, si la información permite distinguirlo correctamente.
+
+No es necesario construir inicialmente un modelo independiente para cada combinación de modalidad, canal y segmento, porque el histórico es corto y algunas categorías pueden tener pocos registros.
+
+Primero se debe construir un pronóstico agregado robusto. Después se puede evaluar una desagregación complementaria, siempre que tenga suficiente volumen y estabilidad estadística.
+
+Importante: `POS1_NOM_MODALIDAD_F` representa la modalidad del fraude. No debe confundirse automáticamente con el canal transaccional.
+
+**9. Historia anterior a noviembre de 2025**
+
+El histórico identificado comienza en noviembre de 2025.
+
+Verifica si existen fuentes anteriores que puedan incorporarse. En particular, sería útil contar con información anterior para analizar rezagos largos y la maduración de cohortes.
+
+Si no existe información adicional, trabaja con el periodo disponible y documenta la censura de las cohortes antiguas y recientes. No extrapoles patrones de maduración que no puedan observarse con los datos.
+
+**10. Umbrales de probabilidad de excedencia**
+
+No inventes umbrales monetarios.
+
+Primero identifica si existen metas, KRIs, límites de apetito de riesgo o umbrales oficiales para el monto de fraude digital.
+
+Si existen, utilizaremos esos valores para calcular:
+
+- Probabilidad de superar el umbral.
+- Probabilidad de mantenerse por debajo del umbral.
+- Exposición esperada frente a la meta o límite.
+
+Si todavía no existen umbrales definidos, deja el análisis parametrizable para que pueda ingresar diferentes montos y consultar su probabilidad de excedencia.
+
+### 4. Entorno corporativo y tecnología
+
+**11. Instalación de librerías**
+
+Antes de implementar la aplicación, verifica las restricciones del entorno corporativo.
+
+Quiero priorizar Python con:
+
+- Polars para procesamiento de datos.
+- NumPy y SciPy para simulación y análisis estadístico.
+- Plotly para visualizaciones interactivas.
+- Streamlit para la interfaz web local, si está autorizado.
+
+DuckDB puede evaluarse como alternativa o complemento para consultas analíticas.
+
+No instales paquetes ni utilices repositorios externos sin autorización. Primero verifica si existe un repositorio interno, proxy corporativo o procedimiento aprobado para instalar dependencias.
+
+Si Streamlit no está permitido, propón una arquitectura alternativa compatible con el entorno corporativo. No desarrolles toda la aplicación sobre una tecnología cuya instalación todavía no esté autorizada.
+
+### 5. Consideraciones metodológicas obligatorias
+
+Quiero que el proyecto mantenga estas reglas:
+
+1. La variable principal será el monto bruto de fraude reportable por mes de cierre.
+2. La variable complementaria será la cantidad de clientes únicos afectados por mes de cierre.
+3. La fecha de transacción (`PERIODO` / `POS1_FECHA_HORA_TRX`) permitirá analizar el origen temporal de los fraudes.
+4. La fecha de cierre permitirá analizar cuándo se materializa el registro del fraude.
+5. Debemos estudiar la matriz de maduración entre mes de transacción y mes de cierre.
+6. El pronóstico será progresivo (*Rolling Forecast*), utilizando diferentes fechas de corte dentro del mes.
+7. El componente Monte Carlo simulará exclusivamente cierres futuros aún no observados. No debe volver a simular ni sumar los casos ya cerrados.
+8. El backtesting deberá respetar la información disponible en cada fecha de corte, en la medida que las fuentes históricas lo permitan.
+9. Los resultados deben incluir escenarios P10, P50 y P90, además de métricas de error y cobertura.
+10. Las limitaciones por historia corta, censura de cohortes y recalificaciones deben quedar documentadas.
+
+### 6. Siguiente paso: Etapa 1
+
+Por ahora, no desarrolles todavía el modelo Monte Carlo ni el dashboard completo.
+
+Comienza con la inspección técnica de:
+
+- `MF_DIGITAL_HIST_FY2026.parquet`
+- `MF_DIGITAL_FEATURES_FY2026.parquet`
+- Proceso Integrado V6.
+
+Necesito un diagnóstico que incluya:
+
+- Esquema y diccionario de variables.
+- Granularidad y unicidad de registros.
+- Periodo histórico disponible.
+- Calidad de fechas y montos.
+- Distribución de calificaciones, si existe.
+- Disponibilidad de identificadores de cliente y transacción.
+- Distribución por modalidad, canal y segmento.
+- Consistencia entre fecha diaria y periodo mensual de cierre.
+- Posibilidad de reconstruir estados históricos.
+- Viabilidad real del análisis de maduración y del backtesting.
+
+No imprimas datos personales, identificadores reales ni información sensible. Presenta únicamente estadísticas agregadas, nombres de columnas y diagnósticos de calidad.
+
+Al finalizar, presenta los hallazgos, los problemas detectados y las decisiones que todavía requieren validación. No avances a la siguiente etapa hasta revisar el diagnóstico.
+
+fin respuesta
+
 # PROYECTO: FRAUD FORECASTING ANALYTICS
 ## Modelo probabilístico de pronóstico del fraude financiero mediante simulación Monte Carlo, análisis de maduración y validación histórica.
 
